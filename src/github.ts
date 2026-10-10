@@ -17,8 +17,13 @@ export async function commandExists(command: string): Promise<boolean> {
 }
 
 async function run(command: string, args: string[], cwd: string): Promise<string> {
-  const { stdout } = await exec(command, args, { cwd, timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
-  return stdout;
+  const { stdout } = await exec(command, args, {
+    cwd,
+    timeout: 60_000,
+    maxBuffer: 8 * 1024 * 1024,
+    encoding: "utf8",
+  });
+  return stdout ?? "";
 }
 
 export async function fetchPullRequest(pr: string, cwd: string): Promise<PullRequestContext> {
@@ -142,6 +147,37 @@ export interface OpenPrInput {
   body: string;
   files?: string[];
   base?: string;
+}
+
+export function isManagedPath(file: string): boolean {
+  const normalized = file.replace(/^"|"$/g, "").replace(/^.* -> /, "");
+  return MANAGED_GIT_PATHS.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
+}
+
+export async function listDirtyManagedPaths(cwd: string): Promise<string[]> {
+  const stdout = await run("git", ["status", "--porcelain", "--untracked-files=all"], cwd);
+  return stdout
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .filter((line) => isManagedPath(line.slice(3)));
+}
+
+export async function assertManagedPathsClean(cwd: string): Promise<void> {
+  try {
+    await run("git", ["rev-parse", "--is-inside-work-tree"], cwd);
+  } catch {
+    throw new Error("Refusing to run `learn --pr`: not a git repository. Commit or initialize git first.");
+  }
+  const dirty = await listDirtyManagedPaths(cwd);
+  if (dirty.length === 0) return;
+  throw new Error(
+    [
+      "Refusing to run `learn --pr`: managed paths have uncommitted changes.",
+      "Commit or stash them first so they are not swept into the bot commit.",
+      ...dirty,
+    ].join("\n"),
+  );
 }
 
 export async function existingManagedPaths(cwd: string): Promise<string[]> {

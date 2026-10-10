@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+
+const exec = promisify(execFile);
 import {
   buildLearnPrTitle,
   checkDuplicate,
@@ -142,6 +146,12 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     expect(buildLearnPrTitle(planned.learned, planned.updated, "42")).toBe("🧠 teamrecall: learned 3 (from #42)");
   });
 
+  it("titles a retire-only result as retired, not no-op", () => {
+    expect(buildLearnPrTitle(0, 0, "42", 1)).toBe("🧠 teamrecall: retired 1 (from #42)");
+    expect(buildLearnPrTitle(1, 1, "7", 2)).toBe("🧠 teamrecall: learned 1, updated 1, retired 2 (from #7)");
+    expect(buildLearnPrTitle(0, 0, "9", 0)).toBe("🧠 teamrecall: no-op (from #9)");
+  });
+
   it("plans a retire by moving the file", () => {
     const existing = [memory("M-003", "Old rule.")];
     const planned = planLearnOutcomes({
@@ -238,8 +248,11 @@ status: active
 ---
 
 Old rule that should be retired.`, "utf8");
+    await exec("git", ["init", "-b", "main"], { cwd: dir });
+    await exec("git", ["add", "-A"], { cwd: dir });
+    await exec("git", ["-c", "user.name=tester", "-c", "user.email=tester@example.test", "commit", "-m", "seed"], { cwd: dir });
 
-    let opened: { files?: string[] } | undefined;
+    let opened: { files?: string[]; title?: string } | undefined;
     const result = await runLearn({
       projectDir: dir,
       pr: "42",
@@ -261,6 +274,35 @@ Old rule that should be retired.`, "utf8");
     expect(result.deleted).toContain(filepath);
     await expect(fs.access(filepath)).rejects.toThrow();
     expect(opened?.files).toEqual(MANAGED_GIT_PATHS);
+    expect(opened?.title).toBe("🧠 teamrecall: retired 1 (from #42)");
+  });
+
+  it("refuses local learn --pr when managed paths are dirty", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-dirty-"));
+    dirs.push(dir);
+    await exec("git", ["init", "-b", "main"], { cwd: dir });
+    await exec("git", ["-c", "user.name=tester", "-c", "user.email=tester@example.test", "commit", "--allow-empty", "-m", "init"], { cwd: dir });
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "memories", "wip.md"), "uncommitted\n", "utf8");
+
+    let distilled = false;
+    await expect(runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: true,
+      ci: false,
+      deps: {
+        fetchPr: async () => context(),
+        distill: async () => {
+          distilled = true;
+          return JSON.stringify({ action: "no_op", reasoning: "should not run" });
+        },
+        openPr: async () => {
+          throw new Error("should not open a PR");
+        },
+      },
+    })).rejects.toThrow(/uncommitted changes/);
+    expect(distilled).toBe(false);
   });
 });
 

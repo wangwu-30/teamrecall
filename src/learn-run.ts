@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { TEAMRECALL_PR_PREFIX } from "./constants.js";
-import { MANAGED_GIT_PATHS, commandExists, fetchPullRequest, openPullRequest } from "./github.js";
+import {
+  MANAGED_GIT_PATHS,
+  assertManagedPathsClean,
+  commandExists,
+  fetchPullRequest,
+  openPullRequest,
+} from "./github.js";
 import {
   buildLearnPrBody,
   buildLearnPrTitle,
@@ -102,6 +108,9 @@ export async function runLearn(input: {
   deps?: LearnRunDeps;
 }): Promise<LearnRunResult> {
   const projectDir = path.resolve(input.projectDir);
+  if (input.openPr && !input.ci) {
+    await assertManagedPathsClean(projectDir);
+  }
   const fetchPr = input.deps?.fetchPr ?? fetchPullRequest;
   const context = await fetchPr(input.pr, projectDir);
 
@@ -159,7 +168,7 @@ export async function runLearn(input: {
     prUrl = await opener({
       cwd: projectDir,
       branch: `teamrecall/learn-from-pr-${context.number}`,
-      title: buildLearnPrTitle(plan.learned, plan.updated, context.number),
+      title: buildLearnPrTitle(plan.learned, plan.updated, context.number, plan.retired),
       body: buildLearnPrBody(plan, context),
       files: [...MANAGED_GIT_PATHS],
     });

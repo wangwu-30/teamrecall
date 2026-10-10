@@ -5,8 +5,8 @@ on:
     types: [closed]
 
 concurrency:
-  group: teamrecall-learn-${{ github.repository }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: teamrecall-learn-${{ github.repository }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
