@@ -21,6 +21,8 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("npm install -g @anthropic-ai/claude-code");
     expect(template).toContain("github:wangwu-30/teamrecall#");
     expect(template).toContain("concurrency:");
+    expect(template).toContain("group: teamrecall-learn-${{ github.repository }}");
+    expect(template).toContain("cancel-in-progress: false");
     expect(template).toContain("TEAMRECALL_REF");
   });
 

@@ -313,10 +313,16 @@ function planOne(
   };
 }
 
-export function buildLearnPrTitle(learned: number, updated: number, prNumber: string): string {
+export function buildLearnPrTitle(
+  learned: number,
+  updated: number,
+  prNumber: string,
+  retired = 0,
+): string {
   const parts: string[] = [];
   if (learned) parts.push(`learned ${learned}`);
   if (updated) parts.push(`updated ${updated}`);
+  if (retired) parts.push(`retired ${retired}`);
   if (parts.length === 0) parts.push("no-op");
   return `🧠 teamrecall: ${parts.join(", ")} (from #${prNumber})`;
 }
