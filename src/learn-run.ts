@@ -27,6 +27,7 @@ export interface LearnRunDeps {
   distill?: (prompt: string) => Promise<string>;
   openPr?: typeof openPullRequest;
   env?: NodeJS.ProcessEnv;
+  hasLocalEngine?: boolean;
 }
 
 export interface LearnRunResult {
@@ -154,10 +155,15 @@ export async function runLearn(input: {
 
   let outcome: LearnOutcome;
   let distiller: LearnPlan["distiller"] = "llm";
+  let distillerReason: LearnPlan["distiller_reason"];
   const env = input.deps?.env ?? process.env;
-  if (!input.deps?.distill && !hasLlmSecret(env)) {
+  const hasLocalEngine = input.deps?.hasLocalEngine
+    ?? (await commandExists("claude") || await commandExists("codex"));
+  const canCallLlm = Boolean(input.deps?.distill) || hasLlmSecret(env) || hasLocalEngine;
+  if (!canCallLlm) {
     outcome = fallbackOutcomeFromReviews(context);
     distiller = "deterministic";
+    distillerReason = "no_llm_secret";
   } else {
     try {
       const raw = input.deps?.distill
@@ -167,11 +173,13 @@ export async function runLearn(input: {
     } catch {
       outcome = fallbackOutcomeFromReviews(context);
       distiller = "deterministic";
+      distillerReason = "llm_failed";
     }
   }
 
   const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days);
   plan.distiller = distiller;
+  plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);
 
   const nextMemories = await loadMemories(projectDir);

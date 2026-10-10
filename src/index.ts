@@ -20,6 +20,7 @@ export {
 } from "./init.js";
 export {
   DETERMINISTIC_DISTILLER_NOTE,
+  LLM_FAILED_DISTILLER_NOTE,
   buildLearnPrBody,
   buildLearnPrTitle,
   checkDuplicate,

@@ -37,6 +37,7 @@ export interface PathConflict {
 }
 
 export type DistillerKind = "llm" | "deterministic";
+export type DistillerReason = "no_llm_secret" | "llm_failed";
 
 export interface LearnPlan {
   action: LearnOutcome["action"];
@@ -47,6 +48,7 @@ export interface LearnPlan {
   retired: number;
   conflicts: PathConflict[];
   distiller: DistillerKind;
+  distiller_reason?: DistillerReason;
   summary: string;
 }
 
@@ -400,9 +402,17 @@ export const DETERMINISTIC_DISTILLER_NOTE = [
   "Day-one learn works with zero secrets. Set `CLAUDE_CODE_OAUTH_TOKEN` after `claude setup-token` to enable LLM distillation.",
 ].join("\n");
 
+export const LLM_FAILED_DISTILLER_NOTE = [
+  "This run used the **deterministic distiller** because the LLM call failed.",
+  "The failure is not the same as having no LLM secret set.",
+].join("\n");
+
 function deterministicSection(plan: LearnPlan): string[] {
   if (plan.distiller !== "deterministic") return [];
-  return ["", "## Distiller", "", DETERMINISTIC_DISTILLER_NOTE];
+  const note = plan.distiller_reason === "llm_failed"
+    ? LLM_FAILED_DISTILLER_NOTE
+    : DETERMINISTIC_DISTILLER_NOTE;
+  return ["", "## Distiller", "", note];
 }
 
 function conflictSections(plan: LearnPlan): string[] {

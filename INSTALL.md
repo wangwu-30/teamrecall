@@ -21,18 +21,18 @@ Resolve the latest `v*` tag. Do not use branch `main`. Do not use the unpublishe
 ```sh
 TAG=$(git ls-remote --tags --refs https://github.com/wangwu-30/teamrecall.git \
   | awk -F/ '{print $NF}' | grep -E '^v[0-9]' | sort -V | tail -1)
-TAG=${TAG:-v0.1.0}
+TAG=${TAG:-v0.2.0}
 BIN="npx -y github:wangwu-30/teamrecall#${TAG}"
 ```
 
-`v0.1.0` is the fallback if tag discovery fails.
+`v0.2.0` is the fallback if tag discovery fails.
 
 ## 2. Init (non-interactive, re-run safe)
 
 From the repo root:
 
 ```sh
-$BIN init --yes --json
+"$BIN" init --yes --json
 ```
 
 `--yes` is the default (never prompt). `--json` prints one JSON object on stdout.
@@ -55,8 +55,8 @@ If `ok` is false, read `error`, fix, and re-run the same `init --yes --json` com
 Always verify, even if init already compiled:
 
 ```sh
-$BIN compile
-$BIN doctor
+"$BIN" compile
+"$BIN" doctor
 ```
 
 Doctor warnings (missing `claude` CLI, no origin remote, no LLM secret) are acceptable on day one. Doctor errors are not — fix and re-run `doctor`.
@@ -90,7 +90,7 @@ Learn works on day one with **zero secrets**: if `CLAUDE_CODE_OAUTH_TOKEN` and `
 After the human runs the secret command and flips the setting, verify:
 
 ```sh
-$BIN doctor
+"$BIN" doctor
 ```
 
 ## 6. What success looks like (report this checklist)
@@ -100,7 +100,7 @@ Report back, with yes/no for each:
 - [ ] `.memory/` exists (`config.yml`, `memories/`, `INDEX.md`)
 - [ ] `.github/workflows/teamrecall.yml` exists
 - [ ] `AGENTS.md` contains `<!-- teamrecall:start -->`
-- [ ] `$BIN doctor` exits 0
+- [ ] `"$BIN" doctor` exits 0
 - [ ] First PR opened (URL) or a commit ready to open
 - [ ] Human received the exact secret command (or JSON said `secret_set: true`)
 - [ ] Human received the Actions “create and approve pull requests” setting

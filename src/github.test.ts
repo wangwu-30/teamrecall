@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   GIT_AUTHOR_NAME,
+  MANAGED_GIT_PATHS,
   gitIdentityArgs,
   gitPushArgs,
   openPullRequest,
@@ -34,6 +35,13 @@ describe("git identity and staging", () => {
     expect(args).toContain("user.name=github-actions[bot]");
     expect(args.join(" ")).toContain(GIT_AUTHOR_NAME);
     expect(args.join(" ")).toContain("41898282+github-actions[bot]@users.noreply.github.com");
+  });
+
+  it("includes teamrecall workflow files in the managed commit", () => {
+    expect(MANAGED_GIT_PATHS).toEqual(expect.arrayContaining([
+      ".github/workflows/teamrecall.yml",
+      ".github/workflows/teamrecall-sweep.yml",
+    ]));
   });
 
   it("force-with-lease when rewriting a fixed bot branch", () => {
@@ -113,4 +121,24 @@ describe("git identity and staging", () => {
     const { stdout: message } = await exec("git", ["log", "-1", "--format=%s", "origin/teamrecall/sweep"], { cwd: dir });
     expect(message.trim()).toBe("second sweep");
   }, 20_000);
+
+  it("returns a fresh repo to main instead of leaving it on the init branch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-fresh-"));
+    dirs.push(dir);
+    await exec("git", ["init", "-b", "main"], { cwd: dir });
+    await fs.mkdir(path.join(dir, ".github", "workflows"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".github", "workflows", "teamrecall.yml"), "name: teamrecall\n", "utf8");
+    await fs.mkdir(path.join(dir, ".memory"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "README.md"), "mem\n", "utf8");
+
+    await openPullRequest({
+      cwd: dir,
+      branch: "teamrecall/init",
+      title: "🧠 teamrecall: initialize team memory",
+      body: "init",
+    });
+    expect(await getCurrentBranch(dir)).toBe("main");
+    const { stdout } = await exec("git", ["show", "teamrecall/init:.github/workflows/teamrecall.yml"], { cwd: dir });
+    expect(stdout).toContain("name: teamrecall");
+  }, 15_000);
 });

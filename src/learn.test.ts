@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const exec = promisify(execFile);
 import {
   DETERMINISTIC_DISTILLER_NOTE,
+  LLM_FAILED_DISTILLER_NOTE,
   buildLearnPrBody,
   buildLearnPrTitle,
   checkDuplicate,
@@ -308,6 +309,7 @@ Old rule that should be retired.`, "utf8");
       deps: {
         fetchPr: async () => context(),
         env: { PATH: process.env.PATH ?? "/usr/bin" },
+        hasLocalEngine: false,
         openPr: async (input) => {
           opened = input;
           return "https://example.test/pr/2";
@@ -316,6 +318,7 @@ Old rule that should be retired.`, "utf8");
     });
 
     expect(result.plan.distiller).toBe("deterministic");
+    expect(result.plan.distiller_reason).toBe("no_llm_secret");
     expect(result.plan.learned).toBe(1);
     expect(opened?.body).toContain("deterministic distiller");
     expect(opened?.body).toContain("CLAUDE_CODE_OAUTH_TOKEN");
@@ -344,6 +347,52 @@ Old rule that should be retired.`, "utf8");
     expect(result.plan.distiller).toBe("llm");
     expect(result.plan.action).toBe("no_op");
     expect(buildLearnPrBody(result.plan, context())).not.toContain("deterministic distiller");
+  });
+
+  it("uses a local claude/codex engine even when no env token is set", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-local-cli-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context(),
+        env: { PATH: process.env.PATH ?? "/usr/bin" },
+        hasLocalEngine: true,
+        distill: async () => JSON.stringify({
+          action: "no_op",
+          reasoning: "local claude is logged in",
+        }),
+      },
+    });
+    expect(result.plan.distiller).toBe("llm");
+    expect(result.plan.distiller_reason).toBeUndefined();
+    expect(buildLearnPrBody(result.plan, context())).not.toContain("neither");
+  });
+
+  it("says the LLM call failed instead of claiming no secret was set", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-llm-fail-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context(),
+        env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
+        distill: async () => {
+          throw new Error("claude exited 1");
+        },
+      },
+    });
+    expect(result.plan.distiller).toBe("deterministic");
+    expect(result.plan.distiller_reason).toBe("llm_failed");
+    const body = buildLearnPrBody(result.plan, context());
+    expect(body).toContain(LLM_FAILED_DISTILLER_NOTE);
+    expect(body).not.toContain("neither `CLAUDE_CODE_OAUTH_TOKEN` nor `OPENAI_API_KEY` was set");
   });
 
   it("refuses local learn --pr when managed paths are dirty", async () => {

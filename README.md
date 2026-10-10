@@ -115,7 +115,7 @@ The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y git
 **Or run it yourself:**
 
 ```bash
-npx -y github:wangwu-30/teamrecall#v0.1.0 init --yes
+npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes
 ```
 
 **它会做什么：**
@@ -227,7 +227,7 @@ status: active
 
 ```bash
 # Initialize teamrecall (non-interactive, re-run safe)
-npx -y github:wangwu-30/teamrecall#v0.1.0 init --yes --json
+npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes --json
 
 # Compile memories into agent rules
 npx teamrecall compile

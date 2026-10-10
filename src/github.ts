@@ -130,6 +130,8 @@ export const MANAGED_GIT_PATHS = [
   "AGENTS.md",
   "CLAUDE.md",
   ".github/copilot-instructions.md",
+  ".github/workflows/teamrecall.yml",
+  ".github/workflows/teamrecall-sweep.yml",
   ".claude/rules/teamrecall",
   ".cursor/rules",
 ];
@@ -230,13 +232,17 @@ export async function openPullRequest(input: OpenPrInput): Promise<string | null
     if (input.base) args.push("--base", input.base);
     return (await run("gh", args, input.cwd)).trim();
   } finally {
-    if (original && original !== input.branch) {
-      try {
-        await run("git", ["checkout", original], input.cwd);
-      } catch {
-        // Leave the caller on the learn branch if checkout back fails.
-      }
-    }
+    await restoreStartingBranch(input.cwd, original, input.branch);
+  }
+}
+
+async function restoreStartingBranch(cwd: string, original: string | null, botBranch: string): Promise<void> {
+  const target = original && original !== botBranch ? original : original ?? "main";
+  if (target === botBranch) return;
+  try {
+    await run("git", ["checkout", target], cwd);
+  } catch {
+    await run("git", ["checkout", "-B", target], cwd);
   }
 }
 
