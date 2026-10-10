@@ -1,11 +1,16 @@
+import { execFile } from "node:child_process";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { MANAGED_GIT_PATHS, assertManagedPathsClean, openPullRequest } from "./github.js";
 import { formatMemory, isoDate, loadMemories } from "./memory.js";
 import type { Memory } from "./types.js";
 import { writeAtomic } from "./utils/atomic.js";
+import { isGitRepo } from "./utils/git.js";
+
+const exec = promisify(execFile);
 
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", "coverage"]);
 
@@ -21,6 +26,56 @@ export interface SweepReport {
   path_dead: SweepFinding[];
   written: string[];
   pr_url?: string | null;
+}
+
+/** Expand `{a,b}` / `{a,{b,c}}` the same way agent globs (Claude/Cursor) do. */
+export function expandBraces(glob: string): string[] {
+  const group = findBraceGroup(glob);
+  if (!group) return [glob];
+  return group.alts.flatMap((alt) => expandBraces(`${group.prefix}${alt}${group.suffix}`));
+}
+
+function findBraceGroup(glob: string): { prefix: string; alts: string[]; suffix: string } | null {
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] === "\\") {
+      i += 1;
+      continue;
+    }
+    if (glob[i] !== "{") continue;
+    let depth = 1;
+    let current = "";
+    const parts: string[] = [];
+    for (let j = i + 1; j < glob.length; j++) {
+      const ch = glob[j]!;
+      if (ch === "\\") {
+        current += ch + (glob[j + 1] ?? "");
+        j += 1;
+        continue;
+      }
+      if (ch === "{") {
+        depth += 1;
+        current += ch;
+        continue;
+      }
+      if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          if (parts.length === 0) break;
+          parts.push(current);
+          return { prefix: glob.slice(0, i), alts: parts, suffix: glob.slice(j + 1) };
+        }
+        current += ch;
+        continue;
+      }
+      if (ch === "," && depth === 1) {
+        parts.push(current);
+        current = "";
+        continue;
+      }
+      current += ch;
+    }
+  }
+  return null;
 }
 
 export function globToRegExp(glob: string): RegExp {
@@ -39,9 +94,18 @@ export function globToRegExp(glob: string): RegExp {
     } else if (rest[0] === "?") {
       out += "[^/]";
       rest = rest.slice(1);
+    } else if (rest[0] === "[") {
+      const end = rest.indexOf("]");
+      if (end > 0) {
+        out += rest.slice(0, end + 1);
+        rest = rest.slice(end + 1);
+      } else {
+        out += "\\[";
+        rest = rest.slice(1);
+      }
     } else {
       const ch = rest[0]!;
-      out += /[.+^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+      out += /[.+^${}()|\\]/.test(ch) ? `\\${ch}` : ch;
       rest = rest.slice(1);
     }
   }
@@ -49,10 +113,27 @@ export function globToRegExp(glob: string): RegExp {
 }
 
 export function globMatches(glob: string, file: string): boolean {
-  return globToRegExp(glob).test(file.replaceAll("\\", "/"));
+  const normalized = file.replaceAll("\\", "/");
+  return expandBraces(glob).some((pattern) => globToRegExp(pattern).test(normalized));
 }
 
 export async function listRepoFiles(projectDir: string): Promise<string[]> {
+  if (await isGitRepo(projectDir)) {
+    try {
+      const { stdout } = await exec("git", ["ls-files", "-z"], {
+        cwd: projectDir,
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      return stdout.split("\0").filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+  return walkRepoFiles(projectDir);
+}
+
+async function walkRepoFiles(projectDir: string): Promise<string[]> {
   const files: string[] = [];
   async function walk(dir: string): Promise<void> {
     let entries: Dirent[];
@@ -151,6 +232,11 @@ export async function runSweep(input: {
     }
   }
 
+  const report: SweepReport = { expired, path_dead: pathDead, written: [] };
+  if (!input.openPr) {
+    return report;
+  }
+
   const written: string[] = [];
   for (const finding of pathDead) {
     const memory = memories.find((item) => item.frontmatter.id === finding.id);
@@ -161,7 +247,6 @@ export async function runSweep(input: {
     written.push(dest);
   }
 
-  const report: SweepReport = { expired, path_dead: pathDead, written };
   if (pathDead.length > 0 || expired.length > 0) {
     const sweepPath = path.join(projectDir, ".memory", "SWEEP.md");
     await writeAtomic(sweepPath, formatSweepReport(report));
@@ -170,13 +255,15 @@ export async function runSweep(input: {
     written.push(...await writeCompiledFiles(projectDir, compiled));
   }
 
-  if (input.openPr && written.length > 0) {
+  report.written = written;
+  if (written.length > 0) {
     report.pr_url = await openPullRequest({
       cwd: projectDir,
       branch: "teamrecall/sweep",
       title: `🧠 teamrecall: sweep (${pathDead.length} path-dead, ${expired.length} expired)`,
       body: formatSweepReport(report),
       files: [...MANAGED_GIT_PATHS],
+      force: true,
     });
   }
 

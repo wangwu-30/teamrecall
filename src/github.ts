@@ -148,6 +148,14 @@ export interface OpenPrInput {
   body: string;
   files?: string[];
   base?: string;
+  force?: boolean;
+  startPoint?: string;
+}
+
+export function gitPushArgs(branch: string, options?: { force?: boolean }): string[] {
+  const args = ["push", "-u", "origin", branch];
+  if (options?.force) args.splice(1, 0, "--force-with-lease");
+  return args;
 }
 
 export function isManagedPath(file: string): boolean {
@@ -204,14 +212,20 @@ export async function stageManagedChanges(cwd: string): Promise<boolean> {
 export async function openPullRequest(input: OpenPrInput): Promise<string | null> {
   const original = await getCurrentBranch(input.cwd);
   try {
-    await run("git", ["checkout", "-B", input.branch], input.cwd);
+    const created = input.startPoint
+      ? ["checkout", "-B", input.branch, input.startPoint]
+      : ["checkout", "-B", input.branch];
+    await run("git", created, input.cwd);
     const dirty = await stageManagedChanges(input.cwd);
     if (!dirty) return null;
     await run("git", [...gitIdentityArgs(), "commit", "-m", input.title], input.cwd);
     if (!(await gitHasRemote("origin", input.cwd))) {
       return null;
     }
-    await run("git", ["push", "-u", "origin", input.branch], input.cwd);
+    await run("git", gitPushArgs(input.branch, { force: input.force }), input.cwd);
+    if (!(await isGithubRemote(input.cwd))) {
+      return null;
+    }
     const args = ["pr", "create", "--title", input.title, "--body", input.body];
     if (input.base) args.push("--base", input.base);
     return (await run("gh", args, input.cwd)).trim();
@@ -223,6 +237,15 @@ export async function openPullRequest(input: OpenPrInput): Promise<string | null
         // Leave the caller on the learn branch if checkout back fails.
       }
     }
+  }
+}
+
+export async function isGithubRemote(cwd: string): Promise<boolean> {
+  try {
+    const url = await run("git", ["remote", "get-url", "origin"], cwd);
+    return /github\.com[:/]/i.test(url);
+  } catch {
+    return false;
   }
 }
 

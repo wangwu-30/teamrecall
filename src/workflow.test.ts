@@ -23,7 +23,7 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("concurrency:");
     expect(template).toContain("group: teamrecall-learn-${{ github.repository }}");
     expect(template).toContain("cancel-in-progress: false");
-    expect(template).toContain("TEAMRECALL_REF");
+    expect(template).toContain("TEAMRECALL_REF: v0.2.0");
   });
 
   it("copies a weekly sweep workflow with the same install conventions", async () => {

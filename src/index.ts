@@ -29,7 +29,7 @@ export {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
-export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, gitIdentityArgs, stageManagedChanges } from "./github.js";
+export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, gitIdentityArgs, gitPushArgs, stageManagedChanges } from "./github.js";
 export {
   clampBody,
   countWords,
@@ -43,7 +43,7 @@ export {
   validateMemoryBody,
   validateSupersededBy,
 } from "./memory.js";
-export { formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
+export { expandBraces, formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
 export type {
   CompiledOutput,
   LearnOutcome,
