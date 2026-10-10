@@ -1,0 +1,62 @@
+name: teamrecall
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  learn:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install teamrecall
+        run: npm install -g teamrecall
+
+      - name: Learn from PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          # Stub: This is week-1 scaffolding
+          # Full implementation would:
+          # 1. Fetch PR diff and review comments
+          # 2. Run claude -p with distillation prompt
+          # 3. Parse outcome (reuse/update/new/no-op)
+          # 4. Create memory files
+          # 5. Compile and open bot PR
+          
+          echo "PR #${{ github.event.pull_request.number }} merged"
+          echo "Learning workflow is stubbed for v0.1"
+          echo "See .github/workflows/teamrecall.yml for implementation plan"
+
+      - name: Compile memories
+        run: teamrecall compile
+
+      - name: Create PR if changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            git config user.name "teamrecall[bot]"
+            git config user.email "teamrecall[bot]@users.noreply.github.com"
+            BRANCH="teamrecall/learn-from-pr-${{ github.event.pull_request.number }}"
+            git checkout -b "$BRANCH"
+            git add .memory/ AGENTS.md .claude/ .cursor/
+            git commit -m "🧠 teamrecall: learned from #${{ github.event.pull_request.number }}"
+            git push origin "$BRANCH"
+            gh pr create --title "🧠 teamrecall: learned from #${{ github.event.pull_request.number }}" \
+              --body "Auto-generated from PR #${{ github.event.pull_request.number }}" \
+              --base main
+          fi
