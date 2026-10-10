@@ -4,7 +4,9 @@ import { program } from "commander";
 import * as path from "node:path";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { runDoctor } from "./doctor.js";
+import { openPullRequest } from "./github.js";
 import { initProject } from "./init.js";
+import { runLearn } from "./learn-run.js";
 import { loadMemories } from "./memory.js";
 
 program
@@ -16,16 +18,38 @@ program
   .command("init")
   .description("Initialize teamrecall in the current repository")
   .option("-d, --dir <path>", "Project directory", process.cwd())
+  .option("--skip-backfill", "Skip backfill from existing rules / recent PRs")
+  .option("--skip-pr", "Do not open a first PR")
   .action(async (options) => {
     try {
       const projectDir = path.resolve(options.dir);
       console.log(`Initializing teamrecall in ${projectDir}...`);
-      const result = await initProject(projectDir);
+      const result = await initProject(projectDir, {
+        backfill: !options.skipBackfill,
+        openPr: !options.skipPr,
+      });
       console.log(`\n✓ Created ${result.created.length} files:`);
-      for (const file of result.created) {
+      for (const file of result.created.slice(0, 12)) {
         console.log(`  ${path.relative(projectDir, file)}`);
       }
       console.log(`\n${result.message}`);
+
+      if (!options.skipPr) {
+        try {
+          const url = await openPullRequest({
+            cwd: projectDir,
+            branch: "teamrecall/init",
+            title: "🧠 teamrecall: initialize team memory",
+            body: "Scaffolds `.memory/`, compiles agent rules, and backfills lessons from existing CLAUDE.md / .cursorrules and recent merged PRs.",
+            files: unique([...result.created, ...result.written].filter((file) => file !== projectDir && !file.endsWith(".memory"))),
+          });
+          if (url) console.log(`\nOpened PR: ${url}`);
+          else console.log("\nNo first PR opened (nothing to commit, or git/gh unavailable).");
+        } catch (error) {
+          console.log(`\nCould not open the first PR automatically: ${error instanceof Error ? error.message : String(error)}`);
+          console.log("Commit `.memory/`, AGENTS.md, and the workflow, then open a PR.");
+        }
+      }
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
@@ -41,19 +65,15 @@ program
       const projectDir = path.resolve(options.dir);
       console.log(`Loading memories from ${projectDir}...`);
       const memories = await loadMemories(projectDir);
-      const activeCount = memories.filter((m) => m.frontmatter.status === "active").length;
+      const activeCount = memories.filter((memory) => memory.frontmatter.status === "active").length;
       console.log(`Found ${memories.length} memories (${activeCount} active)`);
 
-      console.log("Compiling...");
       const compiled = await compileMemories(projectDir, memories);
       const written = await writeCompiledFiles(projectDir, compiled);
 
       console.log(`\n✓ Compiled ${activeCount} memories into ${written.length} files:`);
-      for (const file of written.slice(0, 5)) {
+      for (const file of written.slice(0, 8)) {
         console.log(`  ${path.relative(projectDir, file)}`);
-      }
-      if (written.length > 5) {
-        console.log(`  ...and ${written.length - 5} more`);
       }
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -87,21 +107,27 @@ program
 
 program
   .command("learn")
-  .description("Learn from a PR (local mode, requires claude or codex CLI)")
+  .description("Learn from a PR (local mode uses claude -p or codex exec, then gh)")
   .argument("<pr>", "PR number (e.g., 42)")
   .option("-d, --dir <path>", "Project directory", process.cwd())
+  .option("--ci", "CI mode: compile and open a bot PR when there are changes")
+  .option("--no-pr", "Do not open a PR")
   .action(async (pr, options) => {
     try {
       const projectDir = path.resolve(options.dir);
       console.log(`Learning from PR #${pr}...`);
-      console.log("\n⚠️  This command is a stub for v0.1");
-      console.log("To implement:");
-      console.log("1. Fetch PR data with `gh pr view`");
-      console.log("2. Generate distillation prompt");
-      console.log("3. Run `claude -p` or `codex exec`");
-      console.log("4. Parse outcome and create memory file");
-      console.log("5. Open PR with `gh pr create`");
-      console.log("\nSee src/learn.ts for the distillation logic.");
+      const result = await runLearn({
+        projectDir,
+        pr: String(pr),
+        openPr: options.pr !== false,
+        ci: Boolean(options.ci),
+      });
+
+      console.log(`Outcome: ${result.plan.summary}`);
+      for (const outcome of result.plan.outcomes) {
+        console.log(`- ${outcome.action}${outcome.memory_id ? ` ${outcome.memory_id}` : ""}: ${outcome.reasoning}`);
+      }
+      if (result.pr_url) console.log(`PR: ${result.pr_url}`);
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
@@ -109,3 +135,7 @@ program
   });
 
 program.parse();
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}

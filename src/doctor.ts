@@ -1,5 +1,6 @@
 import * as path from "node:path";
-import { exists } from "./utils/atomic.js";
+import { TEAMRECALL_START } from "./constants.js";
+import { exists, readText } from "./utils/atomic.js";
 import { getCurrentBranch, gitHasRemote, isGitRepo } from "./utils/git.js";
 
 export interface DoctorCheck {
@@ -32,7 +33,7 @@ export async function runDoctor(projectDir: string): Promise<DoctorResult> {
   add("project_directory", await exists(projectDir), projectDir);
 
   const gitRepo = await isGitRepo(projectDir);
-  add("git_repository", gitRepo, gitRepo ? projectDir : "Must be run in a git repository");
+  add("git_repository", gitRepo, gitRepo ? projectDir : "Must be run in a git repository", "warning");
 
   if (gitRepo) {
     const branch = await getCurrentBranch(projectDir);
@@ -57,8 +58,20 @@ export async function runDoctor(projectDir: string): Promise<DoctorResult> {
   }
 
   const agentsMd = path.join(projectDir, "AGENTS.md");
-  const hasAgentsMd = await exists(agentsMd);
-  add("agents_md", hasAgentsMd, hasAgentsMd ? agentsMd : "Will be created on compile", "warning");
+  const agentsContent = await readText(agentsMd);
+  add(
+    "agents_md",
+    agentsContent.includes(TEAMRECALL_START),
+    agentsContent.includes(TEAMRECALL_START) ? agentsMd : "Run `teamrecall compile`",
+    "warning",
+  );
+
+  add(
+    "learn_workflow",
+    await exists(path.join(projectDir, ".github", "workflows", "teamrecall.yml")),
+    ".github/workflows/teamrecall.yml",
+    "warning",
+  );
 
   return {
     ok: checks.every((c) => c.ok || c.severity === "warning"),

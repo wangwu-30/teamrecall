@@ -1,27 +1,30 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Memory, CompiledOutput } from "./types.js";
+import {
+  AGENTS_INDEX_MAX_LINES,
+  CLAUDE_INDEX_IMPORT,
+  MAX_ACTIVE_MEMORIES,
+  TEAMRECALL_END,
+  TEAMRECALL_START,
+} from "./constants.js";
+import type { CompiledOutput, Memory } from "./types.js";
 import { exists, readText, replaceManagedBlock, writeAtomic } from "./utils/atomic.js";
 
-const TEAMRECALL_START = "<!-- teamrecall:start -->";
-const TEAMRECALL_END = "<!-- teamrecall:end -->";
+export { TEAMRECALL_END, TEAMRECALL_START };
 
 export async function compileMemories(
-  projectDir: string,
+  _projectDir: string,
   memories: Memory[],
 ): Promise<CompiledOutput> {
-  const activeMemories = memories.filter((m) => m.frontmatter.status === "active");
-
-  const indexContent = generateIndexMd(activeMemories);
-  const agentsBlock = generateAgentsMdBlock(activeMemories);
-  const claudeRules = generateClaudeRules(activeMemories);
-  const cursorRules = generateCursorRules(activeMemories);
+  const activeMemories = memories
+    .filter((memory) => memory.frontmatter.status === "active")
+    .slice(0, MAX_ACTIVE_MEMORIES);
 
   return {
-    agents_md: agentsBlock,
-    index_md: indexContent,
-    claude_rules: claudeRules,
-    cursor_rules: cursorRules,
+    agents_md: generateAgentsMdBlock(activeMemories),
+    index_md: generateIndexMd(activeMemories),
+    claude_rules: generateClaudeRules(activeMemories),
+    cursor_rules: generateCursorRules(activeMemories),
   };
 }
 
@@ -34,12 +37,10 @@ function generateIndexMd(memories: Memory[]): string {
   ];
 
   const byKind = new Map<string, Memory[]>();
-  for (const mem of memories) {
-    const kind = mem.frontmatter.kind;
-    if (!byKind.has(kind)) {
-      byKind.set(kind, []);
-    }
-    byKind.get(kind)!.push(mem);
+  for (const memory of memories) {
+    const kind = memory.frontmatter.kind;
+    if (!byKind.has(kind)) byKind.set(kind, []);
+    byKind.get(kind)!.push(memory);
   }
 
   const kindTitles = {
@@ -49,69 +50,76 @@ function generateIndexMd(memories: Memory[]): string {
     map: "🗺️ Maps",
   };
 
-  for (const [kind, title] of Object.entries(kindTitles)) {
-    const mems = byKind.get(kind) || [];
-    if (mems.length === 0) continue;
-
-    lines.push(`## ${title}`, "");
-    for (const mem of mems) {
-      const title = extractTitle(mem.body);
-      const evidence = formatEvidence(mem.frontmatter.evidence);
-      lines.push(`- **${mem.frontmatter.id}**: ${title} ${evidence}`);
+  for (const [kind, heading] of Object.entries(kindTitles)) {
+    const group = byKind.get(kind) || [];
+    if (group.length === 0) continue;
+    lines.push(`## ${heading}`, "");
+    for (const memory of group) {
+      lines.push(`- **${memory.frontmatter.id}**: ${extractTitle(memory.body)} ${formatEvidence(memory.frontmatter.evidence)}`);
     }
     lines.push("");
   }
 
-  return lines.join("\n");
+  return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function generateAgentsMdBlock(memories: Memory[]): string {
+export function generateAgentsMdBlock(memories: Memory[]): string {
   if (memories.length === 0) {
     return "No active team memories.";
   }
 
-  const lines = [
+  const header = [
     "## Team Memory",
     "",
     `The team has ${memories.length} active memories from code review:`,
     "",
   ];
+  const footer = ["", "See `.memory/INDEX.md` for full details."];
+  const reserved = header.length + footer.length;
+  const items: string[] = [];
 
-  for (const mem of memories.slice(0, 10)) {
-    const title = extractTitle(mem.body);
-    const paths = mem.frontmatter.paths.length > 0
-      ? ` (${mem.frontmatter.paths.slice(0, 2).join(", ")})`
+  for (const memory of memories) {
+    const title = extractTitle(memory.body);
+    const paths = memory.frontmatter.paths.length > 0
+      ? ` (${memory.frontmatter.paths.slice(0, 2).join(", ")})`
       : "";
-    lines.push(`- **${mem.frontmatter.id}**: ${title}${paths}`);
+    items.push(`- **${memory.frontmatter.id}**: ${title}${paths}`);
+    if (reserved + items.length + 1 > AGENTS_INDEX_MAX_LINES) {
+      items.pop();
+      items.push(`- …and ${memories.length - items.length} more`);
+      break;
+    }
   }
 
-  if (memories.length > 10) {
-    lines.push(`- …and ${memories.length - 10} more`);
+  const block = [...header, ...items, ...footer].join("\n");
+  const lines = block.split("\n");
+  if (lines.length > AGENTS_INDEX_MAX_LINES) {
+    return lines.slice(0, AGENTS_INDEX_MAX_LINES).join("\n");
   }
-
-  lines.push("", "See `.memory/INDEX.md` for full details.");
-
-  return lines.join("\n");
+  return block;
 }
 
 function generateClaudeRules(memories: Memory[]): Map<string, string> {
   const rules = new Map<string, string>();
 
-  for (const mem of memories) {
-    const filename = `${mem.frontmatter.id}.md`;
+  for (const memory of memories) {
+    const paths = memory.frontmatter.paths;
+    const frontmatter = paths.length > 0
+      ? ["---", "paths:", ...paths.map((glob) => `  - ${JSON.stringify(glob)}`), "---"].join("\n")
+      : "---\n---";
+
     const content = [
-      "---",
-      `paths: ${JSON.stringify(mem.frontmatter.paths)}`,
-      "---",
+      frontmatter,
       "",
-      `# ${mem.frontmatter.id}: ${extractTitle(mem.body)}`,
+      `# ${memory.frontmatter.id}: ${extractTitle(memory.body)}`,
       "",
-      mem.body,
+      memory.body,
       "",
-      `*From ${mem.frontmatter.evidence.pr || "code review"} by @${mem.frontmatter.author}*`,
+      `*From ${memory.frontmatter.evidence.pr || "code review"} by @${memory.frontmatter.author}*`,
+      "",
     ].join("\n");
 
-    rules.set(filename, content);
+    rules.set(`${memory.frontmatter.id}.md`, content);
   }
 
   return rules;
@@ -120,33 +128,43 @@ function generateClaudeRules(memories: Memory[]): Map<string, string> {
 function generateCursorRules(memories: Memory[]): Map<string, string> {
   const rules = new Map<string, string>();
 
-  for (const mem of memories) {
-    const filename = `teamrecall-${mem.frontmatter.id}.mdc`;
-    const globs = mem.frontmatter.paths.length > 0
-      ? mem.frontmatter.paths
-      : ["**/*"];
+  for (const memory of memories) {
+    const title = extractTitle(memory.body);
+    const paths = memory.frontmatter.paths;
+    const frontmatter = paths.length > 0
+      ? [
+          "---",
+          `description: ${JSON.stringify(`${memory.frontmatter.id}: ${title}`)}`,
+          `globs: ${paths.join(", ")}`,
+          "alwaysApply: false",
+          "---",
+        ].join("\n")
+      : [
+          "---",
+          `description: ${JSON.stringify(`${memory.frontmatter.id}: ${title}`)}`,
+          "alwaysApply: true",
+          "---",
+        ].join("\n");
 
     const content = [
-      "---",
-      `globs: ${JSON.stringify(globs)}`,
-      "---",
+      frontmatter,
       "",
-      `# ${mem.frontmatter.id}: ${extractTitle(mem.body)}`,
+      `# ${memory.frontmatter.id}: ${title}`,
       "",
-      mem.body,
+      memory.body,
       "",
-      `*From ${mem.frontmatter.evidence.pr || "code review"} by @${mem.frontmatter.author}*`,
+      `*From ${memory.frontmatter.evidence.pr || "code review"} by @${memory.frontmatter.author}*`,
+      "",
     ].join("\n");
 
-    rules.set(filename, content);
+    rules.set(`teamrecall-${memory.frontmatter.id}.mdc`, content);
   }
 
   return rules;
 }
 
-function extractTitle(body: string): string {
-  const lines = body.trim().split("\n");
-  const firstLine = lines[0] || "";
+export function extractTitle(body: string): string {
+  const firstLine = body.trim().split("\n")[0] || "";
   return firstLine.replace(/^#+\s*/, "").slice(0, 80);
 }
 
@@ -168,9 +186,8 @@ export async function writeCompiledFiles(
   written.push(indexPath);
 
   const agentsMdPath = path.join(projectDir, "AGENTS.md");
-  const currentAgentsMd = await readText(agentsMdPath);
   const updatedAgentsMd = replaceManagedBlock(
-    currentAgentsMd,
+    await readText(agentsMdPath),
     TEAMRECALL_START,
     TEAMRECALL_END,
     compiled.agents_md,
@@ -181,10 +198,8 @@ export async function writeCompiledFiles(
   const claudeMdPath = path.join(projectDir, "CLAUDE.md");
   if (await exists(claudeMdPath)) {
     const currentClaudeMd = await readText(claudeMdPath);
-    const importLine = "@.memory/INDEX.md";
-    if (!currentClaudeMd.includes(importLine)) {
-      const updated = currentClaudeMd.trimEnd() + `\n\n${importLine}\n`;
-      await writeAtomic(claudeMdPath, updated);
+    if (!currentClaudeMd.includes(CLAUDE_INDEX_IMPORT)) {
+      await writeAtomic(claudeMdPath, `${currentClaudeMd.trimEnd()}\n\n${CLAUDE_INDEX_IMPORT}\n`);
       written.push(claudeMdPath);
     }
   }

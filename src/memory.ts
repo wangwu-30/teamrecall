@@ -1,13 +1,16 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
-import type { Memory, MemoryFrontmatter, TeamRecallConfig } from "./types.js";
+import { DEFAULT_TTL_DAYS, MAX_BODY_WORDS } from "./constants.js";
+import type { Memory, MemoryFrontmatter, MemoryKind, TeamRecallConfig } from "./types.js";
 import { exists } from "./utils/atomic.js";
 
 const DEFAULT_CONFIG: TeamRecallConfig = {
   max_active_memories: 50,
-  review_ttl_days: 90,
+  review_ttl_days: DEFAULT_TTL_DAYS,
 };
+
+const KINDS: MemoryKind[] = ["gotcha", "decision", "convention", "map"];
 
 export async function loadConfig(projectDir: string): Promise<TeamRecallConfig> {
   const configPath = path.join(projectDir, ".memory", "config.yml");
@@ -15,7 +18,8 @@ export async function loadConfig(projectDir: string): Promise<TeamRecallConfig> 
     return DEFAULT_CONFIG;
   }
   const content = await fs.readFile(configPath, "utf8");
-  return { ...DEFAULT_CONFIG, ...YAML.parse(content) };
+  const parsed = YAML.parse(content) ?? {};
+  return { ...DEFAULT_CONFIG, ...parsed };
 }
 
 export async function loadMemories(projectDir: string): Promise<Memory[]> {
@@ -50,32 +54,57 @@ export function parseMemory(content: string): { frontmatter: MemoryFrontmatter; 
   try {
     const frontmatter = YAML.parse(match[1]) as MemoryFrontmatter;
     const body = match[2].trim();
-
     if (!isValidFrontmatter(frontmatter)) {
       return null;
     }
-
     return { frontmatter, body };
   } catch {
     return null;
   }
 }
 
-function isValidFrontmatter(fm: any): fm is MemoryFrontmatter {
+export function isValidFrontmatter(fm: unknown): fm is MemoryFrontmatter {
+  if (typeof fm !== "object" || fm === null) return false;
+  const value = fm as Record<string, unknown>;
+  const evidence = value.evidence;
   return (
-    typeof fm === "object" &&
-    typeof fm.id === "string" &&
-    ["gotcha", "decision", "convention", "map"].includes(fm.kind) &&
-    Array.isArray(fm.paths) &&
-    typeof fm.author === "string" &&
-    typeof fm.created === "string" &&
-    typeof fm.review_after === "string" &&
-    ["active", "retired"].includes(fm.status)
+    typeof value.id === "string" &&
+    /^M-\d+$/.test(value.id) &&
+    KINDS.includes(value.kind as MemoryKind) &&
+    Array.isArray(value.paths) &&
+    value.paths.every((item) => typeof item === "string") &&
+    (evidence === undefined || typeof evidence === "object") &&
+    typeof value.author === "string" &&
+    typeof value.created === "string" &&
+    typeof value.review_after === "string" &&
+    (value.status === "active" || value.status === "retired")
   );
 }
 
+export function countWords(text: string): number {
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+export function clampBody(body: string, maxWords = MAX_BODY_WORDS): string {
+  const words = body.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return body.trim();
+  return words.slice(0, maxWords).join(" ");
+}
+
+export function validateMemoryBody(body: string): string[] {
+  const errors: string[] = [];
+  if (!body.trim()) errors.push("body is empty");
+  if (countWords(body) > MAX_BODY_WORDS) {
+    errors.push(`body exceeds ${MAX_BODY_WORDS} words`);
+  }
+  return errors;
+}
+
 export function formatMemory(frontmatter: MemoryFrontmatter, body: string): string {
-  return `---\n${YAML.stringify(frontmatter).trim()}\n---\n\n${body.trim()}\n`;
+  return `---\n${YAML.stringify(frontmatter).trim()}\n---\n\n${clampBody(body)}\n`;
 }
 
 export function generateMemoryId(existingIds: string[]): string {
@@ -96,4 +125,19 @@ export function slugify(text: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
+}
+
+export function isoDate(date = new Date()): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export function reviewAfterDate(created: string, ttlDays = DEFAULT_TTL_DAYS): string {
+  const date = new Date(`${created}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + ttlDays);
+  return date.toISOString().slice(0, 10);
+}
+
+export function memoryFilename(id: string, title: string): string {
+  const slug = slugify(title) || "memory";
+  return `${id}-${slug}.md`;
 }

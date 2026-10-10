@@ -1,0 +1,39 @@
+name: teamrecall
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  learn:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install teamrecall
+        run: |
+          if [ -f package.json ] && grep -q '"name": "teamrecall"' package.json; then
+            npm ci
+            npm run build
+            echo "TEAMRECALL_BIN=node ${GITHUB_WORKSPACE}/dist/cli.js" >> "$GITHUB_ENV"
+          else
+            npm install -g teamrecall
+            echo "TEAMRECALL_BIN=teamrecall" >> "$GITHUB_ENV"
+          fi
+
+      - name: Learn from merged PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: $TEAMRECALL_BIN learn ${{ github.event.pull_request.number }} --ci

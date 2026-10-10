@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { formatMemory, generateMemoryId, parseMemory, slugify } from "./memory.js";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clampBody,
+  countWords,
+  formatMemory,
+  generateMemoryId,
+  isValidFrontmatter,
+  loadMemories,
+  parseMemory,
+  reviewAfterDate,
+  slugify,
+  validateMemoryBody,
+} from "./memory.js";
 import type { MemoryFrontmatter } from "./types.js";
 
 describe("parseMemory", () => {
@@ -35,6 +49,62 @@ Body`;
 
   it("returns null for missing frontmatter", () => {
     expect(parseMemory("Just body text")).toBeNull();
+  });
+
+  it("rejects an id that is not M-digits", () => {
+    expect(isValidFrontmatter({
+      id: "memory-1",
+      kind: "gotcha",
+      paths: ["src/**"],
+      author: "a",
+      created: "2026-10-10",
+      review_after: "2027-01-08",
+      status: "active",
+    })).toBe(false);
+  });
+});
+
+describe("body limits", () => {
+  it("counts and clamps to 120 words", () => {
+    const words = Array.from({ length: 130 }, (_, index) => `w${index}`).join(" ");
+    expect(countWords(words)).toBe(130);
+    expect(validateMemoryBody(words)[0]).toMatch(/120/);
+    expect(countWords(clampBody(words))).toBe(120);
+  });
+});
+
+describe("reviewAfterDate", () => {
+  it("defaults to +90 days", () => {
+    expect(reviewAfterDate("2026-10-10")).toBe("2027-01-08");
+  });
+});
+
+describe("loadMemories", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  });
+
+  it("reads valid M-*.md files and skips junk", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-mem-"));
+    dirs.push(dir);
+    const folder = path.join(dir, ".memory", "memories");
+    await fs.mkdir(folder, { recursive: true });
+    await fs.writeFile(path.join(folder, "M-001-retry.md"), `---
+id: M-001
+kind: gotcha
+paths: ["src/**"]
+author: alice
+created: "2026-10-10"
+review_after: "2027-01-08"
+status: active
+---
+
+Use retries only in the gateway wrapper.`, "utf8");
+    await fs.writeFile(path.join(folder, "notes.md"), "ignore", "utf8");
+    const loaded = await loadMemories(dir);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].frontmatter.id).toBe("M-001");
   });
 });
 

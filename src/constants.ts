@@ -1,0 +1,10 @@
+export const TEAMRECALL_START = "<!-- teamrecall:start -->";
+export const TEAMRECALL_END = "<!-- teamrecall:end -->";
+export const CLAUDE_INDEX_IMPORT = "@.memory/INDEX.md";
+export const MAX_ACTIVE_MEMORIES = 50;
+export const MAX_BODY_WORDS = 120;
+export const MAX_LEARN_PER_PR = 3;
+export const AGENTS_INDEX_MAX_LINES = 40;
+export const DEFAULT_TTL_DAYS = 90;
+export const DEFAULT_BACKFILL_PRS = 30;
+export const TEAMRECALL_PR_PREFIX = "🧠 teamrecall:";

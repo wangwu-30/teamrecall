@@ -33,6 +33,14 @@
   ],
   "author": "wangwu-30",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangwu-30/teamrecall.git"
+  },
+  "homepage": "https://github.com/wangwu-30/teamrecall",
+  "bugs": {
+    "url": "https://github.com/wangwu-30/teamrecall/issues"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
