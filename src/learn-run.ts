@@ -10,6 +10,7 @@ import {
   commandExists,
   fetchPullRequest,
   openPullRequest,
+  startPointForBotBranch,
 } from "./github.js";
 import {
   buildLearnPrBody,
@@ -221,6 +222,7 @@ export async function runLearn(input: {
       body: buildLearnPrBody(plan, context),
       files: [...MANAGED_GIT_PATHS],
       force: true,
+      startPoint: await startPointForBotBranch(projectDir),
     });
   }
 

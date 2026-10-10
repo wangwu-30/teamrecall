@@ -79,6 +79,26 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
 
 export async function fetchAuthoredComments(pr: string, cwd: string): Promise<AuthoredComment[]> {
   const comments: AuthoredComment[] = [];
+  const endpoints = [
+    `repos/{owner}/{repo}/issues/${pr}/comments`,
+    `repos/{owner}/{repo}/pulls/${pr}/comments`,
+    `repos/{owner}/{repo}/pulls/${pr}/reviews`,
+  ];
+  for (const endpoint of endpoints) {
+    try {
+      const rows = JSON.parse(await run("gh", [
+        "api",
+        endpoint,
+        "--jq", "[.[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type}]",
+      ], cwd)) as AuthoredComment[];
+      comments.push(...rows.filter((comment) => comment.body?.trim()));
+    } catch {
+      // Fine when the token cannot read that collection.
+    }
+  }
+
+  if (comments.length > 0) return comments;
+
   try {
     const issue = JSON.parse(await run("gh", [
       "pr", "view", pr, "--json", "reviews,comments",
@@ -97,18 +117,7 @@ export async function fetchAuthoredComments(pr: string, cwd: string): Promise<Au
       }
     }
   } catch {
-    // Optional: inline review comments via the REST API when available.
-  }
-
-  try {
-    const inline = JSON.parse(await run("gh", [
-      "api",
-      `repos/{owner}/{repo}/pulls/${pr}/comments`,
-      "--jq", "[.[] | {body, author: .user.login, user_type: .user.type}]",
-    ], cwd)) as AuthoredComment[];
-    comments.push(...inline.filter((comment) => comment.body?.trim()));
-  } catch {
-    // Fine when the token cannot read review threads.
+    // Optional fallback when REST is unavailable.
   }
 
   return comments;
@@ -166,6 +175,38 @@ export interface OpenPrInput {
   base?: string;
   force?: boolean;
   startPoint?: string;
+}
+
+export async function getDefaultBranch(cwd: string): Promise<string> {
+  try {
+    const ref = (await run("git", ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd)).trim();
+    const name = ref.replace(/^refs\/remotes\/origin\//, "");
+    if (name) return name;
+  } catch {
+    // origin/HEAD is not always set.
+  }
+  try {
+    const head = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).trim();
+    if (head && head !== "HEAD") return head;
+  } catch {
+    // Detached HEAD.
+  }
+  return "main";
+}
+
+export async function startPointForBotBranch(cwd: string): Promise<string | undefined> {
+  const def = await getDefaultBranch(cwd);
+  try {
+    await run("git", ["rev-parse", "--verify", `origin/${def}`], cwd);
+    return `origin/${def}`;
+  } catch {
+    try {
+      await run("git", ["rev-parse", "--verify", def], cwd);
+      return def;
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 export function gitPushArgs(branch: string, options?: { force?: boolean }): string[] {

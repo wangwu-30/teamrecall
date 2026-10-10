@@ -16,17 +16,61 @@ env:
   TEAMRECALL_REF: v0.2.0
 
 jobs:
-  learn:
-    # Merged PRs always. Closed-unmerged PRs only when comments already exist;
-    # `learn --ci` then skips unless at least one comment is from a human.
+  decide:
+    # Cheap gate: skip the install/learn job when a closed-unmerged thread
+    # is empty or only bots (user.type / known logins) left comments.
     if: >
       github.event.pull_request.merged == true ||
       github.event.pull_request.comments > 0 ||
       github.event.pull_request.review_comments > 0
     runs-on: ubuntu-latest
+    outputs:
+      learn: ${{ steps.decide.outputs.learn }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+            echo "learn=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PR="${{ github.event.pull_request.number }}"
+          authors=$(
+            {
+              gh api "repos/${{ github.repository }}/issues/${PR}/comments" --jq '.[] | [.user.login, .user.type] | @tsv' || true
+              gh api "repos/${{ github.repository }}/pulls/${PR}/comments" --jq '.[] | [.user.login, .user.type] | @tsv' || true
+              gh api "repos/${{ github.repository }}/pulls/${PR}/reviews" --jq '.[] | select(.body != "") | [.user.login, .user.type] | @tsv' || true
+            } | awk 'NF'
+          )
+          if [ -z "$authors" ]; then
+            echo "learn=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          while IFS=$'\t' read -r login type; do
+            lower=$(printf '%s' "$login" | tr '[:upper:]' '[:lower:]')
+            case "$lower" in
+              *'[bot]'*|*-bot|github-actions|codecov|vercel|dependabot|renovate|copilot|cursor)
+                continue
+                ;;
+            esac
+            if [ "$(printf '%s' "$type" | tr '[:upper:]' '[:lower:]')" = "bot" ]; then
+              continue
+            fi
+            echo "learn=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          done <<< "$authors"
+          echo "learn=false" >> "$GITHUB_OUTPUT"
+
+  learn:
+    needs: decide
+    if: needs.decide.outputs.learn == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4

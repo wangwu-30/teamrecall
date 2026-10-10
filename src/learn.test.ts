@@ -27,7 +27,7 @@ import {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
-import { isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
+import { humanCommentBodies, isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
 import { MANAGED_GIT_PATHS } from "./github.js";
 import { parseMemory } from "./memory.js";
 import type { Memory, PullRequestContext } from "./types.js";
@@ -191,6 +191,23 @@ describe("closed unmerged PRs", () => {
     expect(isBotAuthor("Copilot", "BOT")).toBe(true);
     expect(isBotAuthor("renovate-bot")).toBe(true);
     expect(isBotAuthor("")).toBe(false);
+    expect(isBotAuthor("codecov")).toBe(true);
+    expect(isBotAuthor("github-actions")).toBe(true);
+    expect(isBotAuthor("vercel")).toBe(true);
+    expect(isBotAuthor("alice")).toBe(false);
+  });
+
+  it("counts review summary bodies as human feedback", () => {
+    expect(humanCommentBodies([
+      { body: "Please disclose AI use and open an issue with a repro first.", author: "alice" },
+      { body: "Coverage dropped.", author: "codecov" },
+    ])).toEqual(["Please disclose AI use and open an issue with a repro first."]);
+    expect(shouldLearnFromClosedPr({
+      merged: false,
+      human_review_comments: humanCommentBodies([
+        { body: "Request changes: open an issue with a repro first.", author: "alice" },
+      ]),
+    })).toBe(true);
   });
 
   it("learns from unmerged PRs only when a human left a review comment", () => {
@@ -373,7 +390,7 @@ Old rule that should be retired.`, "utf8");
     await exec("git", ["add", "-A"], { cwd: dir });
     await exec("git", ["-c", "user.name=tester", "-c", "user.email=tester@example.test", "commit", "-m", "seed"], { cwd: dir });
 
-    let opened: { files?: string[]; title?: string; force?: boolean } | undefined;
+    let opened: { files?: string[]; title?: string; force?: boolean; startPoint?: string } | undefined;
     const result = await runLearn({
       projectDir: dir,
       pr: "42",
@@ -397,6 +414,7 @@ Old rule that should be retired.`, "utf8");
     expect(opened?.files).toEqual(MANAGED_GIT_PATHS);
     expect(opened?.title).toBe("🧠 teamrecall: retired 1 (from #42)");
     expect(opened?.force).toBe(true);
+    expect(opened?.startPoint).toBe("main");
   });
 
   it("uses the deterministic distiller when no LLM secrets are set and says so in the PR body", async () => {

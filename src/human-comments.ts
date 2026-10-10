@@ -4,11 +4,26 @@ export interface AuthoredComment {
   user_type?: string;
 }
 
+/** Plain logins `gh pr view` returns without a `[bot]` suffix. */
+export const KNOWN_BOT_LOGINS = new Set([
+  "github-actions",
+  "codecov",
+  "vercel",
+  "dependabot",
+  "renovate",
+  "copilot",
+  "cursor",
+  "imgbot",
+  "netlify",
+  "supabase",
+]);
+
 export function isBotAuthor(author: string, userType?: string): boolean {
   if (userType && userType.toLowerCase() === "bot") return true;
   const login = author.trim().toLowerCase();
   if (!login) return false;
-  return login.includes("[bot]") || login.endsWith("-bot");
+  if (login.includes("[bot]") || login.endsWith("-bot")) return true;
+  return KNOWN_BOT_LOGINS.has(login);
 }
 
 export function humanCommentBodies(comments: AuthoredComment[]): string[] {
