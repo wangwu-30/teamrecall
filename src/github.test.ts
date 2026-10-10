@@ -10,6 +10,7 @@ import {
   gitIdentityArgs,
   gitPushArgs,
   openPullRequest,
+  pullRequestAlreadyExists,
   stageManagedChanges,
 } from "./github.js";
 import { getCurrentBranch } from "./utils/git.js";
@@ -42,6 +43,12 @@ describe("git identity and staging", () => {
       ".github/workflows/teamrecall.yml",
       ".github/workflows/teamrecall-sweep.yml",
     ]));
+  });
+
+  it("treats an already-open sweep PR as success", () => {
+    expect(pullRequestAlreadyExists("a pull request already exists for teamrecall/sweep")).toBe(true);
+    expect(pullRequestAlreadyExists("GraphQL: already exists (createPullRequest)")).toBe(true);
+    expect(pullRequestAlreadyExists("HTTP 401")).toBe(false);
   });
 
   it("force-with-lease when rewriting a fixed bot branch", () => {

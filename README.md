@@ -230,13 +230,13 @@ status: active
 npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes --json
 
 # Compile memories into agent rules
-npx teamrecall compile
+npx -y github:wangwu-30/teamrecall#v0.2.0 compile
 
 # Check installation
-npx teamrecall doctor
+npx -y github:wangwu-30/teamrecall#v0.2.0 doctor
 
 # Learn from a PR (no LLM secret → deterministic distiller)
-npx teamrecall learn 42
+npx -y github:wangwu-30/teamrecall#v0.2.0 learn 42
 ```
 
 ---
@@ -275,9 +275,9 @@ npx teamrecall learn 42
 
 **Q: What if I don't use Claude Code?**
 
-**English:** teamrecall works with Cursor, Codex, and any agent that reads `.cursorrules` or `AGENTS.md`. The learning workflow can use `codex exec` instead of `claude -p` (see `npx teamrecall learn`).
+**English:** teamrecall works with Cursor, Codex, and any agent that reads `.cursorrules` or `AGENTS.md`. The learning workflow can use `codex exec` instead of `claude -p` (see `npx -y github:wangwu-30/teamrecall#v0.2.0 learn`).
 
-**中文：** teamrecall 支持 Cursor、Codex 以及任何读取 `.cursorrules` 或 `AGENTS.md` 的助手。学习工作流可以使用 `codex exec` 代替 `claude -p`（参见 `npx teamrecall learn`）。
+**中文：** teamrecall 支持 Cursor、Codex 以及任何读取 `.cursorrules` 或 `AGENTS.md` 的助手。学习工作流可以使用 `codex exec` 代替 `claude -p`（参见 `npx -y github:wangwu-30/teamrecall#v0.2.0 learn`）。
 
 ---
 

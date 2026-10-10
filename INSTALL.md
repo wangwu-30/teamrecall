@@ -22,17 +22,17 @@ Resolve the latest `v*` tag. Do not use branch `main`. Do not use the unpublishe
 TAG=$(git ls-remote --tags --refs https://github.com/wangwu-30/teamrecall.git \
   | awk -F/ '{print $NF}' | grep -E '^v[0-9]' | sort -V | tail -1)
 TAG=${TAG:-v0.2.0}
-BIN="npx -y github:wangwu-30/teamrecall#${TAG}"
+trc() { npx -y "github:wangwu-30/teamrecall#${TAG}" "$@"; }
 ```
 
-`v0.2.0` is the fallback if tag discovery fails.
+`v0.2.0` is the fallback if tag discovery fails. `trc` is a shell function (not a quoted command string). Call it as `trc <subcommand>`.
 
 ## 2. Init (non-interactive, re-run safe)
 
 From the repo root:
 
 ```sh
-"$BIN" init --yes --json
+trc init --yes --json
 ```
 
 `--yes` is the default (never prompt). `--json` prints one JSON object on stdout.
@@ -48,18 +48,18 @@ What init does (every step is safe to re-run):
 
 Parse the JSON. Fields you need: `ok`, `reused`, `created`, `written`, `skipped`, `secret_set`, `human_actions`, `pr_url`, `pr_error`, `doctor`.
 
-If `ok` is false, read `error`, fix, and re-run the same `init --yes --json` command.
+If `ok` is false, read `error`, fix, and re-run the same `trc init --yes --json` command.
 
 ## 3. Compile and doctor
 
 Always verify, even if init already compiled:
 
 ```sh
-"$BIN" compile
-"$BIN" doctor
+trc compile
+trc doctor
 ```
 
-Doctor warnings (missing `claude` CLI, no origin remote, no LLM secret) are acceptable on day one. Doctor errors are not — fix and re-run `doctor`.
+Doctor warnings (missing `claude` CLI, no origin remote, no LLM secret) are acceptable on day one. Doctor errors are not — fix and re-run `trc doctor`.
 
 ## 4. Open the first PR
 
@@ -85,12 +85,12 @@ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
 
 **One repo setting:** GitHub → this repo → Settings → Actions → General → Workflow permissions → enable **Allow GitHub Actions to create and approve pull requests**.
 
-Learn works on day one with **zero secrets**: if `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are both unset, `teamrecall learn` uses the deterministic distiller and says so in the learn PR body.
+Learn works on day one with **zero secrets**: if `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are both unset, `trc learn` uses the deterministic distiller and says so in the learn PR body.
 
 After the human runs the secret command and flips the setting, verify:
 
 ```sh
-"$BIN" doctor
+trc doctor
 ```
 
 ## 6. What success looks like (report this checklist)
@@ -100,7 +100,7 @@ Report back, with yes/no for each:
 - [ ] `.memory/` exists (`config.yml`, `memories/`, `INDEX.md`)
 - [ ] `.github/workflows/teamrecall.yml` exists
 - [ ] `AGENTS.md` contains `<!-- teamrecall:start -->`
-- [ ] `"$BIN" doctor` exits 0
+- [ ] `trc doctor` exits 0
 - [ ] First PR opened (URL) or a commit ready to open
 - [ ] Human received the exact secret command (or JSON said `secret_set: true`)
 - [ ] Human received the Actions “create and approve pull requests” setting

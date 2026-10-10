@@ -267,7 +267,7 @@ Old rule that should be retired.`, "utf8");
     await exec("git", ["add", "-A"], { cwd: dir });
     await exec("git", ["-c", "user.name=tester", "-c", "user.email=tester@example.test", "commit", "-m", "seed"], { cwd: dir });
 
-    let opened: { files?: string[]; title?: string } | undefined;
+    let opened: { files?: string[]; title?: string; force?: boolean } | undefined;
     const result = await runLearn({
       projectDir: dir,
       pr: "42",
@@ -290,6 +290,7 @@ Old rule that should be retired.`, "utf8");
     await expect(fs.access(filepath)).rejects.toThrow();
     expect(opened?.files).toEqual(MANAGED_GIT_PATHS);
     expect(opened?.title).toBe("🧠 teamrecall: retired 1 (from #42)");
+    expect(opened?.force).toBe(true);
   });
 
   it("uses the deterministic distiller when no LLM secrets are set and says so in the PR body", async () => {
@@ -393,6 +394,27 @@ Old rule that should be retired.`, "utf8");
     const body = buildLearnPrBody(result.plan, context());
     expect(body).toContain(LLM_FAILED_DISTILLER_NOTE);
     expect(body).not.toContain("neither `CLAUDE_CODE_OAUTH_TOKEN` nor `OPENAI_API_KEY` was set");
+  });
+
+  it("in CI with no LLM secret says no secret set even if claude CLI is installed", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-ci-nosecret-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: false,
+      ci: true,
+      deps: {
+        fetchPr: async () => context(),
+        env: { PATH: process.env.PATH ?? "/usr/bin", GITHUB_ACTIONS: "true" },
+        hasLocalEngine: true,
+      },
+    });
+    expect(result.plan.distiller).toBe("deterministic");
+    expect(result.plan.distiller_reason).toBe("no_llm_secret");
+    expect(buildLearnPrBody(result.plan, context())).toContain(DETERMINISTIC_DISTILLER_NOTE);
+    expect(buildLearnPrBody(result.plan, context())).not.toContain("LLM call failed");
   });
 
   it("refuses local learn --pr when managed paths are dirty", async () => {

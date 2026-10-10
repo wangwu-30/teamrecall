@@ -38,6 +38,19 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("cancel-in-progress: false");
   });
 
+  it("INSTALL.md invokes npx via a shell function, not a quoted BIN string", async () => {
+    const install = await fs.readFile(path.join(root, "INSTALL.md"), "utf8");
+    expect(install).toContain('trc() { npx -y "github:wangwu-30/teamrecall#${TAG}" "$@"; }');
+    expect(install).toContain("trc init --yes --json");
+    expect(install).toContain("trc compile");
+    expect(install).toContain("trc doctor");
+    expect(install).not.toMatch(/"\$BIN"/);
+    expect(install).not.toContain("npx teamrecall");
+    const readme = await fs.readFile(path.join(root, "README.md"), "utf8");
+    expect(readme).not.toContain("npx teamrecall");
+    expect(readme).toContain("npx -y github:wangwu-30/teamrecall#");
+  });
+
   it("declares a prepare script so git installs build dist", async () => {
     const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
     expect(pkg.scripts?.prepare).toBe("tsc");

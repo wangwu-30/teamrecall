@@ -228,9 +228,13 @@ export async function openPullRequest(input: OpenPrInput): Promise<string | null
     if (!(await isGithubRemote(input.cwd))) {
       return null;
     }
-    const args = ["pr", "create", "--title", input.title, "--body", input.body];
-    if (input.base) args.push("--base", input.base);
-    return (await run("gh", args, input.cwd)).trim();
+    return createOrReusePullRequest({
+      cwd: input.cwd,
+      branch: input.branch,
+      title: input.title,
+      body: input.body,
+      base: input.base,
+    });
   } finally {
     await restoreStartingBranch(input.cwd, original, input.branch);
   }
@@ -243,6 +247,41 @@ async function restoreStartingBranch(cwd: string, original: string | null, botBr
     await run("git", ["checkout", target], cwd);
   } catch {
     await run("git", ["checkout", "-B", target], cwd);
+  }
+}
+
+export function pullRequestAlreadyExists(error: string): boolean {
+  return /already exists|already a pull request/i.test(error);
+}
+
+export async function viewPullRequestUrl(cwd: string, branch: string): Promise<string | null> {
+  try {
+    const url = (await run("gh", ["pr", "view", branch, "--json", "url", "--jq", ".url"], cwd)).trim();
+    return url || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function createOrReusePullRequest(input: {
+  cwd: string;
+  branch: string;
+  title: string;
+  body: string;
+  base?: string;
+}): Promise<string | null> {
+  const existing = await viewPullRequestUrl(input.cwd, input.branch);
+  if (existing) return existing;
+  try {
+    const args = ["pr", "create", "--title", input.title, "--body", input.body, "--head", input.branch];
+    if (input.base) args.push("--base", input.base);
+    return (await run("gh", args, input.cwd)).trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const reused = await viewPullRequestUrl(input.cwd, input.branch);
+    if (reused) return reused;
+    if (pullRequestAlreadyExists(message)) return null;
+    throw error;
   }
 }
 

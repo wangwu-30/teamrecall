@@ -157,9 +157,11 @@ export async function runLearn(input: {
   let distiller: LearnPlan["distiller"] = "llm";
   let distillerReason: LearnPlan["distiller_reason"];
   const env = input.deps?.env ?? process.env;
+  const hasSecret = hasLlmSecret(env);
+  const inCi = Boolean(input.ci || env.GITHUB_ACTIONS);
   const hasLocalEngine = input.deps?.hasLocalEngine
     ?? (await commandExists("claude") || await commandExists("codex"));
-  const canCallLlm = Boolean(input.deps?.distill) || hasLlmSecret(env) || hasLocalEngine;
+  const canCallLlm = Boolean(input.deps?.distill) || hasSecret || (hasLocalEngine && !inCi);
   if (!canCallLlm) {
     outcome = fallbackOutcomeFromReviews(context);
     distiller = "deterministic";
@@ -173,7 +175,7 @@ export async function runLearn(input: {
     } catch {
       outcome = fallbackOutcomeFromReviews(context);
       distiller = "deterministic";
-      distillerReason = "llm_failed";
+      distillerReason = hasSecret ? "llm_failed" : "no_llm_secret";
     }
   }
 
@@ -195,6 +197,7 @@ export async function runLearn(input: {
       title: buildLearnPrTitle(plan.learned, plan.updated, context.number, plan.retired),
       body: buildLearnPrBody(plan, context),
       files: [...MANAGED_GIT_PATHS],
+      force: true,
     });
   }
 

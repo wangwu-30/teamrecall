@@ -40,7 +40,7 @@ export {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
-export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, gitIdentityArgs, gitPushArgs, stageManagedChanges } from "./github.js";
+export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, createOrReusePullRequest, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges } from "./github.js";
 export {
   clampBody,
   countWords,
