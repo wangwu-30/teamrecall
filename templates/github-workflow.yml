@@ -17,12 +17,9 @@ env:
 
 jobs:
   decide:
-    # Cheap gate: skip the install/learn job when a closed-unmerged thread
-    # is empty or only bots (user.type / known logins) left comments.
-    if: >
-      github.event.pull_request.merged == true ||
-      github.event.pull_request.comments > 0 ||
-      github.event.pull_request.review_comments > 0
+    # Always run on closed PRs. GitHub's comments / review_comments counts
+    # miss review-summary-only reviews; decide checks reviews via REST and
+    # skips the install/learn job when the thread is empty or bot-only.
     runs-on: ubuntu-latest
     outputs:
       learn: ${{ steps.decide.outputs.learn }}
