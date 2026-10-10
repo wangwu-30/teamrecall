@@ -6,7 +6,7 @@ import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { runDoctor } from "./doctor.js";
 import { openPullRequest } from "./github.js";
 import { initProject } from "./init.js";
-import { runLearn } from "./learn-run.js";
+import { runLearn, shouldOpenLearnPr } from "./learn-run.js";
 import { loadMemories } from "./memory.js";
 
 program
@@ -111,7 +111,7 @@ program
   .argument("<pr>", "PR number (e.g., 42)")
   .option("-d, --dir <path>", "Project directory", process.cwd())
   .option("--ci", "CI mode: compile and open a bot PR when there are changes")
-  .option("--no-pr", "Do not open a PR")
+  .option("--pr", "Open a bot PR (local learn defaults to no PR)")
   .action(async (pr, options) => {
     try {
       const projectDir = path.resolve(options.dir);
@@ -119,7 +119,7 @@ program
       const result = await runLearn({
         projectDir,
         pr: String(pr),
-        openPr: options.pr !== false,
+        openPr: shouldOpenLearnPr({ ci: Boolean(options.ci), pr: Boolean(options.pr) }),
         ci: Boolean(options.ci),
       });
 

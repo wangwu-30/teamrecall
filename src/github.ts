@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import * as path from "node:path";
+import { exists } from "./utils/atomic.js";
+import { getCurrentBranch, gitHasRemote } from "./utils/git.js";
 import type { PullRequestContext } from "./types.js";
 
 const exec = promisify(execFile);
@@ -114,30 +117,76 @@ export async function setClaudeSecret(token: string, cwd: string): Promise<boole
   }
 }
 
+export const GIT_AUTHOR_NAME = "github-actions[bot]";
+export const GIT_AUTHOR_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com";
+
+export const MANAGED_GIT_PATHS = [
+  ".memory",
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".claude/rules/teamrecall",
+  ".cursor/rules",
+];
+
+export function gitIdentityArgs(): string[] {
+  return [
+    "-c", `user.name=${GIT_AUTHOR_NAME}`,
+    "-c", `user.email=${GIT_AUTHOR_EMAIL}`,
+  ];
+}
+
 export interface OpenPrInput {
   cwd: string;
   branch: string;
   title: string;
   body: string;
-  files: string[];
+  files?: string[];
   base?: string;
 }
 
-export async function openPullRequest(input: OpenPrInput): Promise<string | null> {
-  if (input.files.length === 0) return null;
-  await run("git", ["checkout", "-B", input.branch], input.cwd);
-  await run("git", ["add", "--", ...input.files], input.cwd);
-  try {
-    await run("git", ["diff", "--cached", "--quiet", "--", ...input.files], input.cwd);
-    return null;
-  } catch {
-    // Cached diff is non-empty, continue.
+export async function existingManagedPaths(cwd: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const relative of MANAGED_GIT_PATHS) {
+    if (await exists(path.join(cwd, relative))) found.push(relative);
   }
-  await run("git", ["commit", "-m", input.title, "--", ...input.files], input.cwd);
-  await run("git", ["push", "-u", "origin", input.branch], input.cwd);
-  const args = ["pr", "create", "--title", input.title, "--body", input.body];
-  if (input.base) args.push("--base", input.base);
-  return (await run("gh", args, input.cwd)).trim();
+  return found;
+}
+
+export async function stageManagedChanges(cwd: string): Promise<boolean> {
+  const paths = await existingManagedPaths(cwd);
+  if (paths.length === 0) return false;
+  await run("git", ["add", "-A", "--", ...paths], cwd);
+  try {
+    await run("git", ["diff", "--cached", "--quiet", "--", ...paths], cwd);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export async function openPullRequest(input: OpenPrInput): Promise<string | null> {
+  const original = await getCurrentBranch(input.cwd);
+  try {
+    await run("git", ["checkout", "-B", input.branch], input.cwd);
+    const dirty = await stageManagedChanges(input.cwd);
+    if (!dirty) return null;
+    await run("git", [...gitIdentityArgs(), "commit", "-m", input.title], input.cwd);
+    if (!(await gitHasRemote("origin", input.cwd))) {
+      return null;
+    }
+    await run("git", ["push", "-u", "origin", input.branch], input.cwd);
+    const args = ["pr", "create", "--title", input.title, "--body", input.body];
+    if (input.base) args.push("--base", input.base);
+    return (await run("gh", args, input.cwd)).trim();
+  } finally {
+    if (original && original !== input.branch) {
+      try {
+        await run("git", ["checkout", original], input.cwd);
+      } catch {
+        // Leave the caller on the learn branch if checkout back fails.
+      }
+    }
+  }
 }
 
 function unique(values: string[]): string[] {

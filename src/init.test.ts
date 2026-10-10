@@ -2,9 +2,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { extractRuleLessons } from "./backfill.js";
+import { collectRuleSources, extractRuleLessons } from "./backfill.js";
 import { runDoctor } from "./doctor.js";
-import { initProject } from "./init.js";
+import { initProject, loadWorkflowTemplate } from "./init.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -32,6 +32,38 @@ describe("initProject", () => {
     const dir = await tmp();
     await initProject(dir, { backfill: false, openPr: false });
     await expect(initProject(dir)).rejects.toThrow("already exists");
+  });
+
+  it("copies the workflow template instead of an inline copy", async () => {
+    const dir = await tmp();
+    await initProject(dir, { backfill: false, openPr: false });
+    const written = await fs.readFile(path.join(dir, ".github", "workflows", "teamrecall.yml"), "utf8");
+    expect(written).toBe(await loadWorkflowTemplate());
+    expect(written).not.toContain("npm install -g teamrecall");
+  });
+
+  it("reads *.mdc files when .cursor/rules is a directory", async () => {
+    const dir = await tmp();
+    await fs.mkdir(path.join(dir, ".cursor", "rules"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, ".cursor", "rules", "retries.mdc"),
+      "## Retries\n\nNever retry in the service layer; register retries only in the gateway wrapper so callers see one policy.\n",
+      "utf8",
+    );
+    const sources = await collectRuleSources(dir);
+    expect(sources.some((source) => source.source.endsWith("retries.mdc"))).toBe(true);
+
+    const result = await initProject(dir, { backfill: true, openPr: false });
+    expect(result.created.some((file) => file.includes(".memory/memories"))).toBe(true);
+  });
+
+  it("removes a half-built .memory/ so init can be retried after failure", async () => {
+    const dir = await tmp();
+    await fs.mkdir(path.join(dir, "AGENTS.md"), { recursive: true });
+    await expect(initProject(dir, { backfill: false, openPr: false })).rejects.toThrow();
+    await expect(fs.access(path.join(dir, ".memory"))).rejects.toThrow();
+    await fs.rm(path.join(dir, "AGENTS.md"), { recursive: true, force: true });
+    await expect(initProject(dir, { backfill: false, openPr: false })).resolves.toBeTruthy();
   });
 
   it("backfills conventions from CLAUDE.md", async () => {

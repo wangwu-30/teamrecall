@@ -107,4 +107,35 @@ describe("writeCompiledFiles", () => {
     expect(await fs.readFile(path.join(dir, "CLAUDE.md"), "utf8")).toContain(CLAUDE_INDEX_IMPORT);
     expect(second.filter((file) => file.endsWith("CLAUDE.md"))).toHaveLength(0);
   });
+
+  it("deletes stale generated rules for memories that are no longer active", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-stale-"));
+    dirs.push(dir);
+    await writeCompiledFiles(dir, await compileMemories(dir, [
+      memory({ id: "M-001" }),
+      memory({ id: "M-002" }),
+    ]));
+    await fs.writeFile(path.join(dir, ".cursor", "rules", "custom.mdc"), "user rule\n", "utf8");
+
+    await writeCompiledFiles(dir, await compileMemories(dir, [memory({ id: "M-001" })]));
+
+    await expect(fs.access(path.join(dir, ".claude", "rules", "teamrecall", "M-001.md"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(dir, ".claude", "rules", "teamrecall", "M-002.md"))).rejects.toThrow();
+    await expect(fs.access(path.join(dir, ".cursor", "rules", "teamrecall-M-002.mdc"))).rejects.toThrow();
+    expect(await fs.readFile(path.join(dir, ".cursor", "rules", "custom.mdc"), "utf8")).toBe("user rule\n");
+  });
+
+  it("keeps 3+ blank lines in user AGENTS.md content across two compiles", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-blanks-"));
+    dirs.push(dir);
+    const user = "# Guide\n\n\n\nKeep the gaps.\n";
+    await fs.writeFile(path.join(dir, "AGENTS.md"), user, "utf8");
+    const compiled = await compileMemories(dir, [memory({ id: "M-001" })]);
+    await writeCompiledFiles(dir, compiled);
+    const first = await fs.readFile(path.join(dir, "AGENTS.md"), "utf8");
+    await writeCompiledFiles(dir, compiled);
+    const second = await fs.readFile(path.join(dir, "AGENTS.md"), "utf8");
+    expect(first).toContain("# Guide\n\n\n\nKeep the gaps.");
+    expect(second).toBe(first);
+  });
 });

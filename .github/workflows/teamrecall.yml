@@ -4,9 +4,16 @@ on:
   pull_request:
     types: [closed]
 
+concurrency:
+  group: teamrecall-learn-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write
+
+env:
+  TEAMRECALL_REF: v0.1.0
 
 jobs:
   learn:
@@ -21,15 +28,17 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Install teamrecall
         run: |
-          if [ -f package.json ] && grep -q '"name": "teamrecall"' package.json; then
+          if [ "${{ github.repository }}" = "wangwu-30/teamrecall" ]; then
             npm ci
             npm run build
             echo "TEAMRECALL_BIN=node ${GITHUB_WORKSPACE}/dist/cli.js" >> "$GITHUB_ENV"
           else
-            npm install -g teamrecall
-            echo "TEAMRECALL_BIN=teamrecall" >> "$GITHUB_ENV"
+            echo "TEAMRECALL_BIN=npx -y github:wangwu-30/teamrecall#${TEAMRECALL_REF}" >> "$GITHUB_ENV"
           fi
 
       - name: Learn from merged PR

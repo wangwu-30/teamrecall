@@ -11,7 +11,14 @@ import {
   parseDistillationResponse,
   planLearnOutcomes,
 } from "./learn.js";
-import { runLearn } from "./learn-run.js";
+import {
+  claudeDistillArgs,
+  runLearn,
+  runWithStdin,
+  sanitisedChildEnv,
+  shouldOpenLearnPr,
+} from "./learn-run.js";
+import { MANAGED_GIT_PATHS } from "./github.js";
 import { parseMemory } from "./memory.js";
 import type { Memory, PullRequestContext } from "./types.js";
 
@@ -212,5 +219,87 @@ describe("runLearn", () => {
       },
     });
     expect(result.skipped).toBe("memory-pr-recompile");
+  });
+
+  it("records retired memory deletions so they can be staged", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-retire-"));
+    dirs.push(dir);
+    const memoriesDir = path.join(dir, ".memory", "memories");
+    await fs.mkdir(memoriesDir, { recursive: true });
+    const filepath = path.join(memoriesDir, "M-003-old.md");
+    await fs.writeFile(filepath, `---
+id: M-003
+kind: gotcha
+paths: ["src/**"]
+author: alice
+created: "2026-10-10"
+review_after: "2027-01-08"
+status: active
+---
+
+Old rule that should be retired.`, "utf8");
+
+    let opened: { files?: string[] } | undefined;
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: true,
+      deps: {
+        fetchPr: async () => context(),
+        distill: async () => JSON.stringify({
+          action: "propose_retire",
+          memory_id: "M-003",
+          reasoning: "Superseded",
+        }),
+        openPr: async (input) => {
+          opened = input;
+          return "https://example.test/pr/1";
+        },
+      },
+    });
+
+    expect(result.deleted).toContain(filepath);
+    await expect(fs.access(filepath)).rejects.toThrow();
+    expect(opened?.files).toEqual(MANAGED_GIT_PATHS);
+  });
+});
+
+describe("learn CLI defaults", () => {
+  it("does not open a PR unless --pr or --ci is set", () => {
+    expect(shouldOpenLearnPr({})).toBe(false);
+    expect(shouldOpenLearnPr({ pr: true })).toBe(true);
+    expect(shouldOpenLearnPr({ ci: true })).toBe(true);
+  });
+});
+
+describe("distill process", () => {
+  it("strips GITHUB_TOKEN from the child environment", () => {
+    const env = sanitisedChildEnv({
+      GITHUB_TOKEN: "secret",
+      GH_TOKEN: "also-secret",
+      PATH: "/usr/bin",
+      KEEP: "yes",
+    });
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.KEEP).toBe("yes");
+  });
+
+  it("passes --disallowedTools and the prompt on stdin, not argv", async () => {
+    expect(claudeDistillArgs()).toEqual([
+      "-p",
+      "--disallowedTools",
+      expect.stringContaining("Bash"),
+    ]);
+    const script = [
+      "let s='';",
+      "process.stdin.on('data', d => s += d);",
+      "process.stdin.on('end', () => {",
+      "  if (process.argv.slice(2).join(' ').includes('PROMPT_BODY')) process.exit(2);",
+      "  process.stdout.write(s);",
+      "});",
+    ].join("");
+    const out = await runWithStdin(process.execPath, ["-e", script], "PROMPT_BODY");
+    expect(out).toBe("PROMPT_BODY");
   });
 });

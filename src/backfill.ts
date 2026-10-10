@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DEFAULT_BACKFILL_PRS } from "./constants.js";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
@@ -13,7 +14,7 @@ import {
   slugify,
 } from "./memory.js";
 import type { LearnOutcome, MemoryFrontmatter, PullRequestContext } from "./types.js";
-import { exists, readText, writeAtomic } from "./utils/atomic.js";
+import { exists, isDirectory, readText, writeAtomic } from "./utils/atomic.js";
 import { fetchPullRequest, listMergedPullRequests } from "./github.js";
 
 export interface BackfillResult {
@@ -24,6 +25,25 @@ export interface BackfillResult {
 }
 
 const RULE_FILES = ["CLAUDE.md", ".cursorrules", "AGENTS.md", ".cursor/rules"];
+
+export async function collectRuleSources(projectDir: string): Promise<Array<{ source: string; content: string }>> {
+  const sources: Array<{ source: string; content: string }> = [];
+  for (const relative of RULE_FILES) {
+    const target = path.join(projectDir, relative);
+    if (!(await exists(target))) continue;
+    if (await isDirectory(target)) {
+      const files = (await fs.readdir(target)).filter((file) => file.endsWith(".mdc") || file.endsWith(".md"));
+      for (const file of files) {
+        const content = await readText(path.join(target, file));
+        if (content) sources.push({ source: `${relative}/${file}`, content });
+      }
+      continue;
+    }
+    const content = await readText(target);
+    if (content) sources.push({ source: relative, content });
+  }
+  return sources;
+}
 
 export function extractRuleLessons(content: string, source: string): LearnOutcome[] {
   const withoutManaged = content.replace(/<!-- teamrecall:start -->[\s\S]*?<!-- teamrecall:end -->/g, "");
@@ -77,14 +97,12 @@ export async function backfillProject(
   let fromRules = 0;
   let fromPrs = 0;
 
-  for (const relative of RULE_FILES) {
-    const target = path.join(projectDir, relative);
-    if (!(await exists(target))) continue;
-    const lessons = extractRuleLessons(await readText(target), relative);
+  for (const { source, content } of await collectRuleSources(projectDir)) {
+    const lessons = extractRuleLessons(content, source);
     for (const lesson of lessons) {
       const file = await writeNewMemory(projectDir, lesson, usedIds, {
         number: "backfill",
-        title: relative,
+        title: source,
         body: "",
         url: "",
         author: "teamrecall",
@@ -92,7 +110,7 @@ export async function backfillProject(
         review_comments: [],
         commit_messages: [],
         commits: [],
-        files: [relative],
+        files: [source],
       }, ttlDays);
       if (file) {
         created.push(file);

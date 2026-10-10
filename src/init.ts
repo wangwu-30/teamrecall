@@ -30,53 +30,58 @@ export async function initProject(projectDir: string, options: InitOptions = {})
     throw new Error(`.memory directory already exists at ${memoryDir}`);
   }
 
-  await fs.mkdir(path.join(memoryDir, "memories"), { recursive: true });
-  await fs.mkdir(path.join(memoryDir, "retired"), { recursive: true });
-  created.push(memoryDir);
+  try {
+    await fs.mkdir(path.join(memoryDir, "memories"), { recursive: true });
+    await fs.mkdir(path.join(memoryDir, "retired"), { recursive: true });
+    created.push(memoryDir);
 
-  const config: TeamRecallConfig = {
-    max_active_memories: MAX_ACTIVE_MEMORIES,
-    review_ttl_days: DEFAULT_TTL_DAYS,
-  };
-  const configPath = path.join(memoryDir, "config.yml");
-  await writeAtomic(configPath, YAML.stringify(config));
-  created.push(configPath);
+    const config: TeamRecallConfig = {
+      max_active_memories: MAX_ACTIVE_MEMORIES,
+      review_ttl_days: DEFAULT_TTL_DAYS,
+    };
+    const configPath = path.join(memoryDir, "config.yml");
+    await writeAtomic(configPath, YAML.stringify(config));
+    created.push(configPath);
 
-  const readmePath = path.join(memoryDir, "README.md");
-  await writeAtomic(readmePath, memoryReadme());
-  created.push(readmePath);
+    const readmePath = path.join(memoryDir, "README.md");
+    await writeAtomic(readmePath, memoryReadme());
+    created.push(readmePath);
 
-  const workflowPath = path.join(projectDir, ".github", "workflows", "teamrecall.yml");
-  if (!(await exists(workflowPath))) {
-    await writeAtomic(workflowPath, await loadWorkflowTemplate());
-    created.push(workflowPath);
+    const workflowPath = path.join(projectDir, ".github", "workflows", "teamrecall.yml");
+    if (!(await exists(workflowPath))) {
+      await writeAtomic(workflowPath, await loadWorkflowTemplate());
+      created.push(workflowPath);
+    }
+
+    let secretSet = false;
+    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (token) {
+      secretSet = await setClaudeSecret(token, projectDir);
+    }
+
+    let written: string[] = [];
+    if (options.backfill) {
+      const result = await backfillProject(projectDir);
+      created.push(...result.created);
+      written = result.written;
+    } else {
+      const compiled = await compileMemories(projectDir, await loadMemories(projectDir));
+      written = await writeCompiledFiles(projectDir, compiled);
+    }
+
+    return {
+      created,
+      written,
+      secret_set: secretSet,
+      message: initMessage(secretSet),
+    };
+  } catch (error) {
+    await fs.rm(memoryDir, { recursive: true, force: true });
+    throw error;
   }
-
-  let secretSet = false;
-  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  if (token) {
-    secretSet = await setClaudeSecret(token, projectDir);
-  }
-
-  let written: string[] = [];
-  if (options.backfill) {
-    const result = await backfillProject(projectDir);
-    created.push(...result.created);
-    written = result.written;
-  } else {
-    const compiled = await compileMemories(projectDir, await loadMemories(projectDir));
-    written = await writeCompiledFiles(projectDir, compiled);
-  }
-
-  return {
-    created,
-    written,
-    secret_set: secretSet,
-    message: initMessage(secretSet),
-  };
 }
 
-async function loadWorkflowTemplate(): Promise<string> {
+export async function loadWorkflowTemplate(): Promise<string> {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     path.join(here, "..", "templates", "github-workflow.yml"),
@@ -86,47 +91,7 @@ async function loadWorkflowTemplate(): Promise<string> {
     const content = await readText(candidate);
     if (content) return content;
   }
-  return defaultWorkflow();
-}
-
-function defaultWorkflow(): string {
-  return `name: teamrecall
-
-on:
-  pull_request:
-    types: [closed]
-
-permissions:
-  contents: write
-  pull-requests: write
-
-jobs:
-  learn:
-    if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install teamrecall
-        run: |
-          if [ -f package.json ] && grep -q '"name": "teamrecall"' package.json; then
-            npm ci
-            npm run build
-            echo "TEAMRECALL_BIN=node \${GITHUB_WORKSPACE}/dist/cli.js" >> "$GITHUB_ENV"
-          else
-            npm install -g teamrecall
-            echo "TEAMRECALL_BIN=teamrecall" >> "$GITHUB_ENV"
-          fi
-      - name: Learn from merged PR
-        env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-          CLAUDE_CODE_OAUTH_TOKEN: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: \${TEAMRECALL_BIN} learn \${{ github.event.pull_request.number }} --ci
-`;
+  throw new Error("Missing templates/github-workflow.yml");
 }
 
 function memoryReadme(): string {

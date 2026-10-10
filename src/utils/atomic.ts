@@ -10,10 +10,20 @@ export async function writeAtomic(target: string, content: string): Promise<void
 
 export async function readText(target: string): Promise<string> {
   try {
+    const stat = await fs.stat(target);
+    if (stat.isDirectory()) return "";
     return await fs.readFile(target, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
     throw error;
+  }
+}
+
+export async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await fs.stat(target)).isDirectory();
+  } catch {
+    return false;
   }
 }
 
@@ -41,11 +51,12 @@ export function replaceManagedBlock(
   const block = `${startMarker}\n${body.trim()}\n${endMarker}`;
   if (start >= 0) {
     const after = end + endMarker.length;
-    return `${current.slice(0, start)}${block}${current.slice(after)}`
-      .replace(/\n{3,}/g, "\n\n")
-      .trimEnd() + "\n";
+    const next = `${current.slice(0, start)}${block}${current.slice(after)}`;
+    return next.endsWith("\n") ? next : `${next}\n`;
   }
 
-  const prefix = current.trimEnd();
-  return `${prefix}${prefix ? "\n\n" : ""}${block}\n`;
+  if (!current) return `${block}\n`;
+  const separator = current.endsWith("\n") ? (current.endsWith("\n\n") ? "" : "\n") : "\n\n";
+  const next = `${current}${separator}${block}\n`;
+  return next;
 }

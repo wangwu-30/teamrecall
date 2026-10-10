@@ -1,4 +1,4 @@
-export { backfillProject, extractRuleLessons } from "./backfill.js";
+export { backfillProject, collectRuleSources, extractRuleLessons } from "./backfill.js";
 export { compileMemories, writeCompiledFiles } from "./compiler.js";
 export {
   AGENTS_INDEX_MAX_LINES,
@@ -20,7 +20,14 @@ export {
   parseDistillationResponse,
   planLearnOutcomes,
 } from "./learn.js";
-export { runLearn } from "./learn-run.js";
+export {
+  CLAUDE_DISALLOWED_TOOLS,
+  claudeDistillArgs,
+  runLearn,
+  sanitisedChildEnv,
+  shouldOpenLearnPr,
+} from "./learn-run.js";
+export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, gitIdentityArgs, stageManagedChanges } from "./github.js";
 export {
   clampBody,
   countWords,

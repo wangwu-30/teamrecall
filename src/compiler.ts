@@ -206,6 +206,7 @@ export async function writeCompiledFiles(
 
   const claudeRulesDir = path.join(projectDir, ".claude", "rules", "teamrecall");
   await fs.mkdir(claudeRulesDir, { recursive: true });
+  await removeStaleRules(claudeRulesDir, compiled.claude_rules, /^M-.+\.md$/);
   for (const [filename, content] of compiled.claude_rules.entries()) {
     const filepath = path.join(claudeRulesDir, filename);
     await writeAtomic(filepath, content);
@@ -214,6 +215,7 @@ export async function writeCompiledFiles(
 
   const cursorRulesDir = path.join(projectDir, ".cursor", "rules");
   await fs.mkdir(cursorRulesDir, { recursive: true });
+  await removeStaleRules(cursorRulesDir, compiled.cursor_rules, /^teamrecall-M-.+\.mdc$/);
   for (const [filename, content] of compiled.cursor_rules.entries()) {
     const filepath = path.join(cursorRulesDir, filename);
     await writeAtomic(filepath, content);
@@ -221,4 +223,17 @@ export async function writeCompiledFiles(
   }
 
   return written;
+}
+
+async function removeStaleRules(
+  dir: string,
+  keep: Map<string, string>,
+  pattern: RegExp,
+): Promise<void> {
+  if (!(await exists(dir))) return;
+  for (const file of await fs.readdir(dir)) {
+    if (pattern.test(file) && !keep.has(file)) {
+      await fs.rm(path.join(dir, file), { force: true });
+    }
+  }
 }
