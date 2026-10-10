@@ -7,7 +7,7 @@ This directory contains example usage and templates.
 ```bash
 # Initialize in your project
 cd /path/to/your/project
-npx teamrecall init
+npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes
 
 # Manually create your first memory
 cat > .memory/memories/M-001-retry-logic.md << 'EOF'
@@ -28,7 +28,7 @@ Move retry logic to the gateway wrapper. Service-layer retries cause cascading f
 EOF
 
 # Compile memories
-npx teamrecall compile
+npx -y github:wangwu-30/teamrecall#v0.2.0 compile
 
 # Check what was generated
 ls -R .memory/ .claude/ .cursor/
@@ -113,7 +113,7 @@ Authentication flows: OAuth in `src/auth/oauth.ts`, session management in `src/a
 
 ## GitHub Action Setup
 
-After running `npx teamrecall init`, set up auto-learning:
+After running `npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes`, set up auto-learning:
 
 ```bash
 # Option 1: Use your team's Claude Code subscription (recommended)
@@ -143,14 +143,14 @@ Coming soon:
 
 ```bash
 # Full learn command
-npx teamrecall learn 42
+npx -y github:wangwu-30/teamrecall#v0.2.0 learn 42
 # → Fetches PR #42
 # → Runs claude -p with distillation prompt
 # → Creates memory file
 # → Opens bot PR
 
 # Weekly staleness check
-npx teamrecall review
+npx -y github:wangwu-30/teamrecall#v0.2.0 sweep
 # → Flags memories past review_after
 # → Suggests merge/retire for duplicates
 ```

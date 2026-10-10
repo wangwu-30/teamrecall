@@ -26,6 +26,8 @@ export interface LearnRunDeps {
   fetchPr?: (pr: string, cwd: string) => Promise<PullRequestContext>;
   distill?: (prompt: string) => Promise<string>;
   openPr?: typeof openPullRequest;
+  env?: NodeJS.ProcessEnv;
+  hasLocalEngine?: boolean;
 }
 
 export interface LearnRunResult {
@@ -41,6 +43,10 @@ export const CLAUDE_DISALLOWED_TOOLS =
 
 export function shouldOpenLearnPr(flags: { ci?: boolean; pr?: boolean }): boolean {
   return Boolean(flags.ci || flags.pr);
+}
+
+export function hasLlmSecret(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.CLAUDE_CODE_OAUTH_TOKEN?.trim() || env.OPENAI_API_KEY?.trim());
 }
 
 export function sanitisedChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -127,6 +133,7 @@ export async function runLearn(input: {
         updated: 0,
         retired: 0,
         conflicts: [],
+        distiller: "llm",
         summary: `recompiled from #${context.number}`,
       },
       written,
@@ -147,16 +154,34 @@ export async function runLearn(input: {
   });
 
   let outcome: LearnOutcome;
-  try {
-    const raw = input.deps?.distill
-      ? await input.deps.distill(prompt)
-      : await distillWithAvailableEngine(prompt);
-    outcome = parseDistillationResponse(raw);
-  } catch {
+  let distiller: LearnPlan["distiller"] = "llm";
+  let distillerReason: LearnPlan["distiller_reason"];
+  const env = input.deps?.env ?? process.env;
+  const hasSecret = hasLlmSecret(env);
+  const inCi = Boolean(input.ci || env.GITHUB_ACTIONS);
+  const hasLocalEngine = input.deps?.hasLocalEngine
+    ?? (await commandExists("claude") || await commandExists("codex"));
+  const canCallLlm = Boolean(input.deps?.distill) || hasSecret || (hasLocalEngine && !inCi);
+  if (!canCallLlm) {
     outcome = fallbackOutcomeFromReviews(context);
+    distiller = "deterministic";
+    distillerReason = "no_llm_secret";
+  } else {
+    try {
+      const raw = input.deps?.distill
+        ? await input.deps.distill(prompt)
+        : await distillWithAvailableEngine(prompt);
+      outcome = parseDistillationResponse(raw);
+    } catch {
+      outcome = fallbackOutcomeFromReviews(context);
+      distiller = "deterministic";
+      distillerReason = hasSecret ? "llm_failed" : "no_llm_secret";
+    }
   }
 
   const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days);
+  plan.distiller = distiller;
+  plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);
 
   const nextMemories = await loadMemories(projectDir);
@@ -172,6 +197,7 @@ export async function runLearn(input: {
       title: buildLearnPrTitle(plan.learned, plan.updated, context.number, plan.retired),
       body: buildLearnPrBody(plan, context),
       files: [...MANAGED_GIT_PATHS],
+      force: true,
     });
   }
 

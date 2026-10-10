@@ -1,12 +1,28 @@
 # teamrecall
 
-**The lessons your team already wrote in code review show up automatically in every teammate's coding agent.**
+Paste this one line into Claude Code, Codex, or Cursor:
+
+```
+Follow https://github.com/wangwu-30/teamrecall/blob/main/INSTALL.md to set up teamrecall in this repo
+```
+
+**Never leave the same review comment twice.**
+
+The lessons your team already wrote in code review show up automatically in every teammate's coding agent.
 
 Git-native, reviewed as PRs, zero infrastructure. Works with Claude Code, Codex, and Cursor.
 
 ---
 
-**你的团队在代码审查中写下的经验，自动出现在每个队友的编码助手中。**
+把这一行粘贴给你的编码助手（Claude Code / Codex / Cursor）：
+
+```
+Follow https://github.com/wangwu-30/teamrecall/blob/main/INSTALL.md to set up teamrecall in this repo
+```
+
+**同一条 review 意见，不要写第二次。**
+
+你的团队在代码审查中写下的经验，自动出现在每个队友的编码助手中。
 
 基于 Git，通过 PR 审查，零基础设施。支持 Claude Code、Codex 和 Cursor。
 
@@ -88,31 +104,26 @@ No manual wiki updates. No asking around. Just works.
 
 ## Install | 安装
 
-**One command:**
+**One line to your coding agent** (preferred):
 
-```bash
-npx teamrecall init
+```
+Follow https://github.com/wangwu-30/teamrecall/blob/main/INSTALL.md to set up teamrecall in this repo
 ```
 
-**What it does:**
-1. Creates `.memory/` directory structure
-2. Guides you to add `CLAUDE_CODE_OAUTH_TOKEN` secret
-3. Opens a PR with memories backfilled from existing `CLAUDE.md` / `.cursorrules` and last 30 PRs
+The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y github:wangwu-30/teamrecall#<latest-tag> init --yes --json`, backfills, compiles, runs `doctor`, and opens the first PR. Re-run is safe. Learn works with zero secrets (deterministic distiller) until you set `CLAUDE_CODE_OAUTH_TOKEN`.
 
-**Value on day one.** No setup paralysis.
-
-**一条命令：**
+**Or run it yourself:**
 
 ```bash
-npx teamrecall init
+npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes
 ```
 
 **它会做什么：**
-1. 创建 `.memory/` 目录结构
-2. 引导你添加 `CLAUDE_CODE_OAUTH_TOKEN` secret
-3. 创建一个 PR，从现有的 `CLAUDE.md` / `.cursorrules` 和最近 30 个 PR 中回填记忆
+1. 创建 `.memory/`（可重复执行，不会毁掉已有记忆）
+2. 从现有的 `CLAUDE.md` / `AGENTS.md` / `.cursor/rules` 和最近合并的 PR 评论回填
+3. 打开第一个 memory PR；没有 secret 也能用
 
-**第一天就有价值。** 无需复杂设置。
+**第一天就有价值。** 把一行话粘贴给助手即可。
 
 ---
 
@@ -215,17 +226,17 @@ status: active
 ## Commands | 命令
 
 ```bash
-# Initialize teamrecall
-npx teamrecall init
+# Initialize teamrecall (non-interactive, re-run safe)
+npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes --json
 
 # Compile memories into agent rules
-npx teamrecall compile
+npx -y github:wangwu-30/teamrecall#v0.2.0 compile
 
 # Check installation
-npx teamrecall doctor
+npx -y github:wangwu-30/teamrecall#v0.2.0 doctor
 
-# Learn from a PR (local mode, uses your own claude/codex CLI)
-npx teamrecall learn 42
+# Learn from a PR (no LLM secret → deterministic distiller)
+npx -y github:wangwu-30/teamrecall#v0.2.0 learn 42
 ```
 
 ---
@@ -264,9 +275,9 @@ npx teamrecall learn 42
 
 **Q: What if I don't use Claude Code?**
 
-**English:** teamrecall works with Cursor, Codex, and any agent that reads `.cursorrules` or `AGENTS.md`. The learning workflow can use `codex exec` instead of `claude -p` (see `npx teamrecall learn`).
+**English:** teamrecall works with Cursor, Codex, and any agent that reads `.cursorrules` or `AGENTS.md`. The learning workflow can use `codex exec` instead of `claude -p` (see `npx -y github:wangwu-30/teamrecall#v0.2.0 learn`).
 
-**中文：** teamrecall 支持 Cursor、Codex 以及任何读取 `.cursorrules` 或 `AGENTS.md` 的助手。学习工作流可以使用 `codex exec` 代替 `claude -p`（参见 `npx teamrecall learn`）。
+**中文：** teamrecall 支持 Cursor、Codex 以及任何读取 `.cursorrules` 或 `AGENTS.md` 的助手。学习工作流可以使用 `codex exec` 代替 `claude -p`（参见 `npx -y github:wangwu-30/teamrecall#v0.2.0 learn`）。
 
 ---
 

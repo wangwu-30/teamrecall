@@ -5,7 +5,8 @@ import YAML from "yaml";
 import { backfillProject } from "./backfill.js";
 import { DEFAULT_TTL_DAYS, MAX_ACTIVE_MEMORIES } from "./constants.js";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
-import { setClaudeSecret } from "./github.js";
+import { runDoctor, type DoctorResult } from "./doctor.js";
+import { openPullRequest, setClaudeSecret } from "./github.js";
 import { loadMemories } from "./memory.js";
 import type { TeamRecallConfig } from "./types.js";
 import { exists, readText, writeAtomic } from "./utils/atomic.js";
@@ -13,50 +14,108 @@ import { exists, readText, writeAtomic } from "./utils/atomic.js";
 export interface InitOptions {
   backfill?: boolean;
   openPr?: boolean;
+  yes?: boolean;
 }
 
 export interface InitResult {
   created: string[];
   written: string[];
+  skipped: string[];
+  reused: boolean;
   message: string;
   secret_set?: boolean;
 }
 
+export interface InitJson {
+  ok: boolean;
+  reused: boolean;
+  created: string[];
+  written: string[];
+  skipped: string[];
+  secret_set: boolean;
+  message: string;
+  human_actions: string[];
+  pr_url: string | null;
+  pr_error?: string;
+  doctor?: {
+    ok: boolean;
+    checks: Array<{ name: string; ok: boolean; severity: string; detail: string }>;
+  };
+  error?: string;
+}
+
+export const HUMAN_SECRET_COMMAND = "claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN";
+export const HUMAN_ACTIONS_SETTING =
+  "GitHub repo Settings → Actions → General → Workflow permissions: enable “Allow GitHub Actions to create and approve pull requests”";
+
+export function humanOnboardingActions(secretSet: boolean): string[] {
+  const actions: string[] = [];
+  if (!secretSet) actions.push(HUMAN_SECRET_COMMAND);
+  actions.push(HUMAN_ACTIONS_SETTING);
+  return actions;
+}
+
+export function toInitJson(input: {
+  result: InitResult;
+  projectDir: string;
+  prUrl?: string | null;
+  prError?: string;
+  doctor?: DoctorResult;
+  error?: string;
+}): InitJson {
+  const rel = (file: string) => {
+    const relative = path.relative(input.projectDir, file);
+    return relative && !relative.startsWith("..") ? relative : file;
+  };
+  return {
+    ok: !input.error,
+    reused: input.result.reused,
+    created: unique(input.result.created.map(rel)),
+    written: unique(input.result.written.map(rel)),
+    skipped: unique(input.result.skipped.map(rel)),
+    secret_set: Boolean(input.result.secret_set),
+    message: input.result.message,
+    human_actions: humanOnboardingActions(Boolean(input.result.secret_set)),
+    pr_url: input.prUrl ?? null,
+    pr_error: input.prError,
+    doctor: input.doctor
+      ? {
+          ok: input.doctor.ok,
+          checks: input.doctor.checks.map((check) => ({
+            name: check.name,
+            ok: check.ok,
+            severity: check.severity,
+            detail: check.detail,
+          })),
+        }
+      : undefined,
+    error: input.error,
+  };
+}
+
 export async function initProject(projectDir: string, options: InitOptions = {}): Promise<InitResult> {
   const created: string[] = [];
+  const skipped: string[] = [];
   const memoryDir = path.join(projectDir, ".memory");
-
-  if (await exists(memoryDir)) {
-    throw new Error(`.memory directory already exists at ${memoryDir}`);
-  }
+  const reused = await exists(memoryDir);
 
   try {
     await fs.mkdir(path.join(memoryDir, "memories"), { recursive: true });
     await fs.mkdir(path.join(memoryDir, "retired"), { recursive: true });
-    created.push(memoryDir);
+    if (reused) skipped.push(memoryDir);
+    else created.push(memoryDir);
 
     const config: TeamRecallConfig = {
       max_active_memories: MAX_ACTIVE_MEMORIES,
       review_ttl_days: DEFAULT_TTL_DAYS,
     };
-    const configPath = path.join(memoryDir, "config.yml");
-    await writeAtomic(configPath, YAML.stringify(config));
-    created.push(configPath);
-
-    const readmePath = path.join(memoryDir, "README.md");
-    await writeAtomic(readmePath, memoryReadme());
-    created.push(readmePath);
+    await ensureWritten(path.join(memoryDir, "config.yml"), YAML.stringify(config), created, skipped);
+    await ensureWritten(path.join(memoryDir, "README.md"), memoryReadme(), created, skipped);
 
     const workflowPath = path.join(projectDir, ".github", "workflows", "teamrecall.yml");
-    if (!(await exists(workflowPath))) {
-      await writeAtomic(workflowPath, await loadWorkflowTemplate());
-      created.push(workflowPath);
-    }
+    await ensureWritten(workflowPath, await loadWorkflowTemplate(), created, skipped);
     const sweepPath = path.join(projectDir, ".github", "workflows", "teamrecall-sweep.yml");
-    if (!(await exists(sweepPath))) {
-      await writeAtomic(sweepPath, await loadSweepWorkflowTemplate());
-      created.push(sweepPath);
-    }
+    await ensureWritten(sweepPath, await loadSweepWorkflowTemplate(), created, skipped);
 
     let secretSet = false;
     const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -66,9 +125,16 @@ export async function initProject(projectDir: string, options: InitOptions = {})
 
     let written: string[] = [];
     if (options.backfill) {
-      const result = await backfillProject(projectDir);
-      created.push(...result.created);
-      written = result.written;
+      const existing = await loadMemories(projectDir);
+      if (existing.length > 0) {
+        const compiled = await compileMemories(projectDir, existing);
+        written = await writeCompiledFiles(projectDir, compiled);
+        skipped.push("backfill");
+      } else {
+        const result = await backfillProject(projectDir);
+        created.push(...result.created);
+        written = result.written;
+      }
     } else {
       const compiled = await compileMemories(projectDir, await loadMemories(projectDir));
       written = await writeCompiledFiles(projectDir, compiled);
@@ -77,13 +143,80 @@ export async function initProject(projectDir: string, options: InitOptions = {})
     return {
       created,
       written,
+      skipped,
+      reused,
       secret_set: secretSet,
       message: initMessage(secretSet),
     };
   } catch (error) {
-    await fs.rm(memoryDir, { recursive: true, force: true });
+    if (!reused) {
+      await fs.rm(memoryDir, { recursive: true, force: true });
+    }
     throw error;
   }
+}
+
+export async function runInitCommand(input: {
+  projectDir: string;
+  backfill?: boolean;
+  skipPr?: boolean;
+  json?: boolean;
+  yes?: boolean;
+  deps?: {
+    openPr?: typeof openPullRequest;
+    doctor?: typeof runDoctor;
+  };
+}): Promise<InitJson> {
+  const result = await initProject(input.projectDir, {
+    backfill: input.backfill !== false,
+    openPr: !input.skipPr,
+    yes: input.yes !== false,
+  });
+
+  let prUrl: string | null = null;
+  let prError: string | undefined;
+  if (!input.skipPr) {
+    try {
+      const opener = input.deps?.openPr ?? openPullRequest;
+      prUrl = (await opener({
+        cwd: input.projectDir,
+        branch: "teamrecall/init",
+        title: "🧠 teamrecall: initialize team memory",
+        body: [
+          "Scaffolds `.memory/`, compiles agent rules, and backfills lessons from existing CLAUDE.md / AGENTS.md / `.cursor/rules` and recent merged PRs.",
+          "",
+          "Learn works on day one with zero secrets (deterministic distiller) until `CLAUDE_CODE_OAUTH_TOKEN` is set.",
+        ].join("\n"),
+        files: unique(
+          [...result.created, ...result.written].filter((file) => file !== input.projectDir && !file.endsWith(".memory")),
+        ),
+      })) ?? null;
+    } catch (error) {
+      prError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const doctorFn = input.deps?.doctor ?? runDoctor;
+  const doctor = await doctorFn(input.projectDir);
+  return toInitJson({ result, projectDir: input.projectDir, prUrl, prError, doctor });
+}
+
+async function ensureWritten(
+  filepath: string,
+  content: string,
+  created: string[],
+  skipped: string[],
+): Promise<void> {
+  if (await exists(filepath)) {
+    skipped.push(filepath);
+    return;
+  }
+  await writeAtomic(filepath, content);
+  created.push(filepath);
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 export async function loadTemplate(filename: string): Promise<string> {
@@ -152,16 +285,16 @@ Memories are automatically compiled into:
 
 function initMessage(secretSet: boolean): string {
   return [
-    "✓ Initialized teamrecall",
+    "✓ Initialized teamrecall (re-run safe; --yes is the default)",
     "",
     "Next steps:",
-    "1. Run `claude setup-token` (uses the team's Claude subscription, no API key).",
     secretSet
-      ? "2. CLAUDE_CODE_OAUTH_TOKEN was stored with `gh secret set`."
-      : "2. Run `gh secret set CLAUDE_CODE_OAUTH_TOKEN` and paste the token.",
-    "3. Review the compiled files and open (or merge) the first memory PR.",
+      ? "1. CLAUDE_CODE_OAUTH_TOKEN was stored with `gh secret set`."
+      : `1. Optional LLM upgrade (learn works now with zero secrets): ${HUMAN_SECRET_COMMAND}`,
+    `2. ${HUMAN_ACTIONS_SETTING}`,
+    "3. Review the compiled files and merge the first memory PR.",
     "",
-    "Day-one value: existing CLAUDE.md / .cursorrules and recent review comments are backfilled when you pass --backfill (CLI default).",
+    "Day-one value: existing CLAUDE.md / AGENTS.md / .cursor/rules and recent review comments are backfilled by default.",
     "See `.memory/README.md` for the memory format.",
   ].join("\n");
 }

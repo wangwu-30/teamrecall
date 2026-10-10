@@ -9,8 +9,18 @@ export {
   TEAMRECALL_START,
 } from "./constants.js";
 export { runDoctor } from "./doctor.js";
-export { initProject, loadSweepWorkflowTemplate } from "./init.js";
 export {
+  HUMAN_ACTIONS_SETTING,
+  HUMAN_SECRET_COMMAND,
+  humanOnboardingActions,
+  initProject,
+  loadSweepWorkflowTemplate,
+  runInitCommand,
+  toInitJson,
+} from "./init.js";
+export {
+  DETERMINISTIC_DISTILLER_NOTE,
+  LLM_FAILED_DISTILLER_NOTE,
   buildLearnPrBody,
   buildLearnPrTitle,
   checkDuplicate,
@@ -25,11 +35,12 @@ export {
 export {
   CLAUDE_DISALLOWED_TOOLS,
   claudeDistillArgs,
+  hasLlmSecret,
   runLearn,
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
-export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, gitIdentityArgs, gitPushArgs, stageManagedChanges } from "./github.js";
+export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, createOrReusePullRequest, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges } from "./github.js";
 export {
   clampBody,
   countWords,

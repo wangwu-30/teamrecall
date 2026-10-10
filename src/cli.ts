@@ -4,8 +4,7 @@ import { program } from "commander";
 import * as path from "node:path";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { runDoctor } from "./doctor.js";
-import { openPullRequest } from "./github.js";
-import { initProject } from "./init.js";
+import { runInitCommand } from "./init.js";
 import { runLearn, shouldOpenLearnPr } from "./learn-run.js";
 import { loadMemories } from "./memory.js";
 import { formatSweepReport, runSweep } from "./sweep.js";
@@ -17,42 +16,51 @@ program
 
 program
   .command("init")
-  .description("Initialize teamrecall in the current repository")
+  .description("Initialize teamrecall in the current repository (non-interactive, re-run safe)")
   .option("-d, --dir <path>", "Project directory", process.cwd())
+  .option("-y, --yes", "Non-interactive; never prompt (default)", true)
+  .option("--json", "Print a machine-readable JSON summary")
   .option("--skip-backfill", "Skip backfill from existing rules / recent PRs")
   .option("--skip-pr", "Do not open a first PR")
   .action(async (options) => {
+    const projectDir = path.resolve(options.dir);
     try {
-      const projectDir = path.resolve(options.dir);
-      console.log(`Initializing teamrecall in ${projectDir}...`);
-      const result = await initProject(projectDir, {
+      if (!options.json) console.log(`Initializing teamrecall in ${projectDir}...`);
+      const summary = await runInitCommand({
+        projectDir,
         backfill: !options.skipBackfill,
-        openPr: !options.skipPr,
+        skipPr: Boolean(options.skipPr),
+        json: Boolean(options.json),
+        yes: options.yes !== false,
       });
-      console.log(`\n✓ Created ${result.created.length} files:`);
-      for (const file of result.created.slice(0, 12)) {
-        console.log(`  ${path.relative(projectDir, file)}`);
+      if (options.json) {
+        console.log(JSON.stringify(summary, null, 2));
+        return;
       }
-      console.log(`\n${result.message}`);
-
-      if (!options.skipPr) {
-        try {
-          const url = await openPullRequest({
-            cwd: projectDir,
-            branch: "teamrecall/init",
-            title: "🧠 teamrecall: initialize team memory",
-            body: "Scaffolds `.memory/`, compiles agent rules, and backfills lessons from existing CLAUDE.md / .cursorrules and recent merged PRs.",
-            files: unique([...result.created, ...result.written].filter((file) => file !== projectDir && !file.endsWith(".memory"))),
-          });
-          if (url) console.log(`\nOpened PR: ${url}`);
-          else console.log("\nNo first PR opened (nothing to commit, or git/gh unavailable).");
-        } catch (error) {
-          console.log(`\nCould not open the first PR automatically: ${error instanceof Error ? error.message : String(error)}`);
-          console.log("Commit `.memory/`, AGENTS.md, and the workflow, then open a PR.");
-        }
+      console.log(`\n✓ Created ${summary.created.length} files:`);
+      for (const file of summary.created.slice(0, 12)) {
+        console.log(`  ${file}`);
+      }
+      if (summary.skipped.length > 0) {
+        console.log(`\nReused ${summary.skipped.length} existing paths (re-run safe).`);
+      }
+      console.log(`\n${summary.message}`);
+      if (summary.pr_url) console.log(`\nOpened PR: ${summary.pr_url}`);
+      else if (!options.skipPr) {
+        console.log("\nNo first PR opened (nothing to commit, or git/gh unavailable).");
+        if (summary.pr_error) console.log(`Could not open the first PR automatically: ${summary.pr_error}`);
+      }
+      console.log("\nHuman actions (if needed):");
+      for (const action of summary.human_actions) {
+        console.log(`  - ${action}`);
       }
     } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.json) {
+        console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+      } else {
+        console.error(`Error: ${message}`);
+      }
       process.exit(1);
     }
   });
@@ -153,7 +161,3 @@ program
   });
 
 program.parse();
-
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
-}
