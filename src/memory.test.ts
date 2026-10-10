@@ -13,6 +13,7 @@ import {
   reviewAfterDate,
   slugify,
   validateMemoryBody,
+  validateSupersededBy,
 } from "./memory.js";
 import type { MemoryFrontmatter } from "./types.js";
 
@@ -51,6 +52,40 @@ Body`;
     expect(parseMemory("Just body text")).toBeNull();
   });
 
+  it("accepts superseded with superseded_by and abandoned", () => {
+    expect(isValidFrontmatter({
+      id: "M-002",
+      kind: "decision",
+      paths: ["src/**"],
+      author: "a",
+      created: "2026-10-10",
+      review_after: "2027-01-08",
+      status: "superseded",
+      superseded_by: "M-001",
+    })).toBe(true);
+    expect(isValidFrontmatter({
+      id: "M-003",
+      kind: "decision",
+      paths: ["src/**"],
+      author: "a",
+      created: "2026-10-10",
+      review_after: "2027-01-08",
+      status: "abandoned",
+    })).toBe(true);
+  });
+
+  it("rejects superseded without a valid superseded_by", () => {
+    expect(isValidFrontmatter({
+      id: "M-002",
+      kind: "decision",
+      paths: ["src/**"],
+      author: "a",
+      created: "2026-10-10",
+      review_after: "2027-01-08",
+      status: "superseded",
+    })).toBe(false);
+  });
+
   it("rejects an id that is not M-digits", () => {
     expect(isValidFrontmatter({
       id: "memory-1",
@@ -61,6 +96,47 @@ Body`;
       review_after: "2027-01-08",
       status: "active",
     })).toBe(false);
+  });
+});
+
+describe("validateSupersededBy", () => {
+  it("requires superseded_by to point at an existing memory", () => {
+    const memories = [
+      {
+        frontmatter: {
+          id: "M-001",
+          kind: "gotcha" as const,
+          paths: ["src/**"],
+          evidence: {},
+          author: "a",
+          created: "2026-10-10",
+          review_after: "2027-01-08",
+          status: "active" as const,
+        },
+        body: "Keep",
+        filepath: "/tmp/M-001.md",
+      },
+      {
+        frontmatter: {
+          id: "M-002",
+          kind: "gotcha" as const,
+          paths: ["src/**"],
+          evidence: {},
+          author: "a",
+          created: "2026-10-10",
+          review_after: "2027-01-08",
+          status: "superseded" as const,
+          superseded_by: "M-999",
+        },
+        body: "Old",
+        filepath: "/tmp/M-002.md",
+      },
+    ];
+    expect(validateSupersededBy(memories)).toEqual([
+      "M-002 superseded_by M-999 does not exist",
+    ]);
+    memories[1].frontmatter.superseded_by = "M-001";
+    expect(validateSupersededBy(memories)).toEqual([]);
   });
 });
 

@@ -17,6 +17,7 @@ function memory(partial: Partial<Memory["frontmatter"]> & { id: string; body?: s
       created: partial.created ?? "2026-10-10",
       review_after: partial.review_after ?? "2027-01-08",
       status: partial.status ?? "active",
+      ...(partial.superseded_by ? { superseded_by: partial.superseded_by } : {}),
     },
     body: partial.body ?? "Use retries only in the gateway wrapper.",
     filepath: `/tmp/.memory/memories/${partial.id}.md`,
@@ -28,6 +29,7 @@ describe("compileMemories", () => {
     const compiled = await compileMemories("/tmp", []);
     expect(compiled.index_md).toContain("# Team Memory Index");
     expect(compiled.agents_md).toContain("No active team memories");
+    expect(compiled.compact_index).toContain("No active team memories");
     expect(compiled.claude_rules.size).toBe(0);
     expect(compiled.cursor_rules.size).toBe(0);
   });
@@ -41,6 +43,29 @@ describe("compileMemories", () => {
     expect(compiled.agents_md).not.toContain("M-002");
     expect(compiled.claude_rules.size).toBe(1);
     expect(compiled.cursor_rules.size).toBe(1);
+  });
+
+  it("indexes abandoned memories as do-not-reintroduce and skips superseded", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({ id: "M-001" }),
+      memory({
+        id: "M-002",
+        status: "abandoned",
+        body: "Tried storing tokens in localStorage; dropped because XSS.",
+      }),
+      memory({
+        id: "M-003",
+        status: "superseded",
+        superseded_by: "M-001",
+        body: "Old retry rule.",
+      }),
+    ]);
+    expect(compiled.index_md).toContain("Do not reintroduce: Tried storing tokens in localStorage");
+    expect(compiled.compact_index).toContain("Do not reintroduce: Tried storing tokens");
+    expect(compiled.index_md).not.toContain("Old retry rule");
+    expect(compiled.claude_rules.has("M-002.md")).toBe(false);
+    expect(compiled.claude_rules.has("M-003.md")).toBe(false);
+    expect(compiled.claude_rules.has("M-001.md")).toBe(true);
   });
 
   it("generates Claude rules with YAML list paths (official docs)", async () => {
@@ -98,14 +123,34 @@ describe("writeCompiledFiles", () => {
     expect(first.some((file) => file.includes(path.join(".cursor", "rules")))).toBe(true);
     expect(first.every((file) =>
       file.startsWith(dir) &&
-      /AGENTS\.md$|INDEX\.md$|CLAUDE\.md$|\.claude\/rules\/teamrecall\/|\.cursor\/rules\/teamrecall-/.test(file),
+      /AGENTS\.md$|INDEX\.md$|CLAUDE\.md$|copilot-instructions\.md$|\.claude\/rules\/teamrecall\/|\.cursor\/rules\/teamrecall-/.test(file),
     )).toBe(true);
 
     const agents = await fs.readFile(path.join(dir, "AGENTS.md"), "utf8");
     expect(agents).toContain(TEAMRECALL_START);
     expect(agents).toContain(TEAMRECALL_END);
-    expect(await fs.readFile(path.join(dir, "CLAUDE.md"), "utf8")).toContain(CLAUDE_INDEX_IMPORT);
-    expect(second.filter((file) => file.endsWith("CLAUDE.md"))).toHaveLength(0);
+    const claude = await fs.readFile(path.join(dir, "CLAUDE.md"), "utf8");
+    expect(claude).toContain(TEAMRECALL_START);
+    expect(claude).toContain("**M-001**");
+    expect(claude).toContain(CLAUDE_INDEX_IMPORT);
+    expect(claude.startsWith("# Project")).toBe(true);
+    const copilot = await fs.readFile(path.join(dir, ".github", "copilot-instructions.md"), "utf8");
+    expect(copilot).toContain(TEAMRECALL_START);
+    expect(copilot).toContain("**M-001**");
+    expect(second.some((file) => file.endsWith("CLAUDE.md"))).toBe(true);
+  });
+
+  it("does not rewrite user text outside the CLAUDE.md managed block", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-claude-"));
+    dirs.push(dir);
+    await fs.writeFile(path.join(dir, "CLAUDE.md"), "# Project\n\n\n\nKeep the gaps.\n", "utf8");
+    const compiled = await compileMemories(dir, [memory({ id: "M-001" })]);
+    await writeCompiledFiles(dir, compiled);
+    const first = await fs.readFile(path.join(dir, "CLAUDE.md"), "utf8");
+    await writeCompiledFiles(dir, compiled);
+    const second = await fs.readFile(path.join(dir, "CLAUDE.md"), "utf8");
+    expect(first).toContain("# Project\n\n\n\nKeep the gaps.");
+    expect(second).toBe(first);
   });
 
   it("deletes stale generated rules for memories that are no longer active", async () => {

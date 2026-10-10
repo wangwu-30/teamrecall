@@ -52,6 +52,11 @@ export async function initProject(projectDir: string, options: InitOptions = {})
       await writeAtomic(workflowPath, await loadWorkflowTemplate());
       created.push(workflowPath);
     }
+    const sweepPath = path.join(projectDir, ".github", "workflows", "teamrecall-sweep.yml");
+    if (!(await exists(sweepPath))) {
+      await writeAtomic(sweepPath, await loadSweepWorkflowTemplate());
+      created.push(sweepPath);
+    }
 
     let secretSet = false;
     const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -81,17 +86,25 @@ export async function initProject(projectDir: string, options: InitOptions = {})
   }
 }
 
-export async function loadWorkflowTemplate(): Promise<string> {
+export async function loadTemplate(filename: string): Promise<string> {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.join(here, "..", "templates", "github-workflow.yml"),
-    path.join(here, "templates", "github-workflow.yml"),
+    path.join(here, "..", "templates", filename),
+    path.join(here, "templates", filename),
   ];
   for (const candidate of candidates) {
     const content = await readText(candidate);
     if (content) return content;
   }
-  throw new Error("Missing templates/github-workflow.yml");
+  throw new Error(`Missing templates/${filename}`);
+}
+
+export async function loadWorkflowTemplate(): Promise<string> {
+  return loadTemplate("github-workflow.yml");
+}
+
+export async function loadSweepWorkflowTemplate(): Promise<string> {
+  return loadTemplate("github-workflow-sweep.yml");
 }
 
 function memoryReadme(): string {
@@ -102,7 +115,8 @@ This directory stores team knowledge captured from code review.
 ## Structure
 
 - \`memories/M-xxx-slug.md\` — Active memories
-- \`retired/\` — Superseded memories
+- \`retired/\` — Retired memories
+- Active/abandoned/superseded files stay in \`memories/\` (\`superseded\` needs \`superseded_by\`)
 - \`INDEX.md\` — Compiled index (auto-generated)
 - \`config.yml\` — Configuration
 

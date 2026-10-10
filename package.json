@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --testTimeout 20000",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"

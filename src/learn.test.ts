@@ -7,8 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const exec = promisify(execFile);
 import {
+  buildLearnPrBody,
   buildLearnPrTitle,
   checkDuplicate,
+  detectConflicts,
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
@@ -303,6 +305,36 @@ Old rule that should be retired.`, "utf8");
       },
     })).rejects.toThrow(/uncommitted changes/);
     expect(distilled).toBe(false);
+  });
+});
+
+describe("conflict hints", () => {
+  it("records a possible conflict when a new memory contradicts an overlapping one", () => {
+    const existing = [memory("M-012", "Use retries only in the gateway wrapper.", ["src/gateway/**"])];
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Retry in each service",
+      paths: ["src/gateway/**"],
+      body: "Retry at the service layer instead of the gateway.",
+      reasoning: "New direction",
+      contradicts: true,
+      conflict_with: "M-012",
+    }, existing, context(), "/tmp/conflict");
+    expect(planned.learned).toBe(1);
+    expect(planned.conflicts).toEqual([{ memory_id: "M-013", existing_id: "M-012" }]);
+    const body = buildLearnPrBody(planned, context());
+    expect(body).toContain("Possible conflict with M-012");
+    expect(body).not.toMatch(/silently create/);
+  });
+
+  it("does not hint when the distiller does not mark a contradiction", () => {
+    const existing = [memory("M-012", "Use retries only in the gateway wrapper.", ["src/gateway/**"])];
+    expect(detectConflicts({
+      action: "new",
+      memory_id: "M-013",
+      paths: ["src/gateway/**"],
+      reasoning: "unrelated extra note",
+    }, existing)).toEqual([]);
   });
 });
 

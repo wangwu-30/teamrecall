@@ -31,6 +31,11 @@ export interface FileMutation {
   delete?: boolean;
 }
 
+export interface PathConflict {
+  memory_id: string;
+  existing_id: string;
+}
+
 export interface LearnPlan {
   action: LearnOutcome["action"];
   outcomes: LearnOutcome[];
@@ -38,6 +43,7 @@ export interface LearnPlan {
   learned: number;
   updated: number;
   retired: number;
+  conflicts: PathConflict[];
   summary: string;
 }
 
@@ -94,9 +100,13 @@ Choose ONE outcome (respond with ONLY the JSON, no other text):
   "paths": ["glob patterns (if new/update)"],
   "body": "≤120 words: trigger and decision change (if new/update)",
   "reasoning": "Why this action",
+  "contradicts": false,
+  "conflict_with": "M-xxx if this contradicts an existing memory",
   "memories": []
 }
 \`\`\`
+
+If a new memory overlaps paths with an existing active memory and disagrees with it, set \`contradicts: true\` and \`conflict_with\` to that id. Do not silently drop either memory.
 
 Actions:
 - **reuse**: This PR validates an existing memory (no change needed)
@@ -172,6 +182,7 @@ export function planLearnOutcomes(
 
   const mutations: FileMutation[] = [];
   const outcomes: LearnOutcome[] = [];
+  const conflicts: PathConflict[] = [];
   let learned = 0;
   let updated = 0;
   let retired = 0;
@@ -201,6 +212,7 @@ export function planLearnOutcomes(
     retired += planned.retired;
     activeCount += planned.learned - planned.retired;
     usedIds.push(...planned.usedIds);
+    conflicts.push(...detectConflicts(planned.outcome, existing));
   }
 
   const action = summarizeAction(outcomes);
@@ -211,8 +223,37 @@ export function planLearnOutcomes(
     learned,
     updated,
     retired,
+    conflicts,
     summary: buildSummary(learned, updated, retired, context.number),
   };
+}
+
+export function pathsOverlap(left: string[], right: string[]): boolean {
+  return left.some((a) => right.some((b) => a === b || globPrefixesOverlap(a, b)));
+}
+
+function globPrefixesOverlap(a: string, b: string): boolean {
+  const strip = (glob: string) => glob.replace(/\*\*.*$/, "").replace(/\/$/, "");
+  const left = strip(a);
+  const right = strip(b);
+  if (!left || !right) return true;
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+export function detectConflicts(outcome: LearnOutcome, existing: Memory[]): PathConflict[] {
+  if (outcome.action !== "new" || !outcome.contradicts) return [];
+  const paths = outcome.paths ?? [];
+  const hinted = outcome.conflict_with;
+  const overlaps = existing
+    .filter((memory) => memory.frontmatter.status === "active")
+    .filter((memory) => memory.frontmatter.id !== outcome.memory_id)
+    .filter((memory) => pathsOverlap(paths, memory.frontmatter.paths))
+    .filter((memory) => !hinted || memory.frontmatter.id === hinted);
+  const targets = overlaps;
+  return targets.map((memory) => ({
+    memory_id: outcome.memory_id || "new",
+    existing_id: memory.frontmatter.id,
+  }));
 }
 
 function planOne(
@@ -345,7 +386,19 @@ export function buildLearnPrBody(plan: LearnPlan, context: PullRequestContext): 
     "Only `.memory/` and compiled agent files are touched.",
     "",
     plan.outcomes.map((outcome) => `- **${outcome.action}** ${outcome.memory_id ?? ""}: ${outcome.reasoning}`).join("\n"),
+    ...conflictSections(plan),
   ].join("\n");
+}
+
+function conflictSections(plan: LearnPlan): string[] {
+  if (plan.conflicts.length === 0) return [];
+  const lines = ["", "## Possible conflicts"];
+  for (const conflict of plan.conflicts) {
+    lines.push("", `### Possible conflict with ${conflict.existing_id}`);
+    lines.push(`Newly proposed ${conflict.memory_id} overlaps paths with ${conflict.existing_id} and the distiller marked it as contradicting.`);
+    lines.push("Review both memories before merging; do not silently keep both if they disagree.");
+  }
+  return lines;
 }
 
 export function fallbackOutcomeFromReviews(context: PullRequestContext): LearnOutcome {

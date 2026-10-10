@@ -1,5 +1,5 @@
 export { backfillProject, collectRuleSources, extractRuleLessons } from "./backfill.js";
-export { compileMemories, writeCompiledFiles } from "./compiler.js";
+export { compileMemories, generateCompactIndex, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
 export {
   AGENTS_INDEX_MAX_LINES,
   CLAUDE_INDEX_IMPORT,
@@ -9,7 +9,7 @@ export {
   TEAMRECALL_START,
 } from "./constants.js";
 export { runDoctor } from "./doctor.js";
-export { initProject } from "./init.js";
+export { initProject, loadSweepWorkflowTemplate } from "./init.js";
 export {
   buildLearnPrBody,
   buildLearnPrTitle,
@@ -18,6 +18,8 @@ export {
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
   parseDistillationResponse,
+  detectConflicts,
+  pathsOverlap,
   planLearnOutcomes,
 } from "./learn.js";
 export {
@@ -27,7 +29,7 @@ export {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
-export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, gitIdentityArgs, stageManagedChanges } from "./github.js";
+export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, gitIdentityArgs, gitPushArgs, stageManagedChanges } from "./github.js";
 export {
   clampBody,
   countWords,
@@ -39,7 +41,9 @@ export {
   parseMemory,
   slugify,
   validateMemoryBody,
+  validateSupersededBy,
 } from "./memory.js";
+export { expandBraces, formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
 export type {
   CompiledOutput,
   LearnOutcome,

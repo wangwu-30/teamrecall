@@ -13,7 +13,7 @@ permissions:
   pull-requests: write
 
 env:
-  TEAMRECALL_REF: v0.1.0
+  TEAMRECALL_REF: v0.2.0
 
 jobs:
   learn:

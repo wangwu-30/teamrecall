@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { loadWorkflowTemplate } from "./init.js";
+import { loadSweepWorkflowTemplate, loadWorkflowTemplate } from "./init.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,7 +23,19 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("concurrency:");
     expect(template).toContain("group: teamrecall-learn-${{ github.repository }}");
     expect(template).toContain("cancel-in-progress: false");
-    expect(template).toContain("TEAMRECALL_REF");
+    expect(template).toContain("TEAMRECALL_REF: v0.2.0");
+  });
+
+  it("copies a weekly sweep workflow with the same install conventions", async () => {
+    const template = await loadSweepWorkflowTemplate();
+    const checkedIn = await fs.readFile(path.join(root, ".github", "workflows", "teamrecall-sweep.yml"), "utf8");
+    expect(template).toBe(checkedIn);
+    expect(template).toContain("cron:");
+    expect(template).toContain("sweep --pr");
+    expect(template).not.toContain("npm install -g teamrecall");
+    expect(template).toContain("github:wangwu-30/teamrecall#");
+    expect(template).toContain("group: teamrecall-sweep-${{ github.repository }}");
+    expect(template).toContain("cancel-in-progress: false");
   });
 
   it("declares a prepare script so git installs build dist", async () => {

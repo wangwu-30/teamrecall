@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   GIT_AUTHOR_NAME,
   gitIdentityArgs,
+  gitPushArgs,
   openPullRequest,
   stageManagedChanges,
 } from "./github.js";
@@ -33,6 +34,13 @@ describe("git identity and staging", () => {
     expect(args).toContain("user.name=github-actions[bot]");
     expect(args.join(" ")).toContain(GIT_AUTHOR_NAME);
     expect(args.join(" ")).toContain("41898282+github-actions[bot]@users.noreply.github.com");
+  });
+
+  it("force-with-lease when rewriting a fixed bot branch", () => {
+    expect(gitPushArgs("teamrecall/sweep")).toEqual(["push", "-u", "origin", "teamrecall/sweep"]);
+    expect(gitPushArgs("teamrecall/sweep", { force: true })).toEqual([
+      "push", "--force-with-lease", "-u", "origin", "teamrecall/sweep",
+    ]);
   });
 
   it("stages deletions of managed memory files with git add -A", async () => {
@@ -69,4 +77,40 @@ describe("git identity and staging", () => {
     const { stdout } = await exec("git", ["log", "-1", "--format=%an", "teamrecall/learn-from-pr-42"], { cwd: dir });
     expect(stdout.trim()).toBe(GIT_AUTHOR_NAME);
   });
+
+  it("force-with-lease updates an existing fixed bot branch", async () => {
+    const dir = await gitRepo();
+    const remote = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-remote-"));
+    dirs.push(remote);
+    await exec("git", ["init", "--bare"], { cwd: remote });
+    await exec("git", ["remote", "add", "origin", remote], { cwd: dir });
+    await exec("git", ["push", "-u", "origin", "main"], { cwd: dir });
+
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "memories", "M-001.md"), "one\n", "utf8");
+    await expect(openPullRequest({
+      cwd: dir,
+      branch: "teamrecall/sweep",
+      title: "first sweep",
+      body: "first",
+      force: true,
+    })).resolves.toBeNull();
+    expect(await getCurrentBranch(dir)).toBe("main");
+
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "memories", "M-002.md"), "two\n", "utf8");
+    await expect(openPullRequest({
+      cwd: dir,
+      branch: "teamrecall/sweep",
+      title: "second sweep",
+      body: "second",
+      force: true,
+    })).resolves.toBeNull();
+
+    const { stdout } = await exec("git", ["ls-remote", "--heads", "origin", "teamrecall/sweep"], { cwd: dir });
+    expect(stdout).toContain("refs/heads/teamrecall/sweep");
+    await exec("git", ["fetch", "origin", "teamrecall/sweep"], { cwd: dir });
+    const { stdout: message } = await exec("git", ["log", "-1", "--format=%s", "origin/teamrecall/sweep"], { cwd: dir });
+    expect(message.trim()).toBe("second sweep");
+  }, 20_000);
 });

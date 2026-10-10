@@ -19,25 +19,28 @@ export async function compileMemories(
   const activeMemories = memories
     .filter((memory) => memory.frontmatter.status === "active")
     .slice(0, MAX_ACTIVE_MEMORIES);
+  const abandonedMemories = memories.filter((memory) => memory.frontmatter.status === "abandoned");
+  const compact = generateCompactIndex(activeMemories, abandonedMemories);
 
   return {
-    agents_md: generateAgentsMdBlock(activeMemories),
-    index_md: generateIndexMd(activeMemories),
+    agents_md: compact,
+    index_md: generateIndexMd(activeMemories, abandonedMemories),
+    compact_index: compact,
     claude_rules: generateClaudeRules(activeMemories),
     cursor_rules: generateCursorRules(activeMemories),
   };
 }
 
-function generateIndexMd(memories: Memory[]): string {
+function generateIndexMd(active: Memory[], abandoned: Memory[]): string {
   const lines = [
     "# Team Memory Index",
     "",
-    "Team memories captured from code review. Referenced automatically by Claude Code, Codex, and Cursor.",
+    "Team memories captured from code review. Referenced automatically by Claude Code, Codex, Cursor, and Copilot.",
     "",
   ];
 
   const byKind = new Map<string, Memory[]>();
-  for (const memory of memories) {
+  for (const memory of active) {
     const kind = memory.frontmatter.kind;
     if (!byKind.has(kind)) byKind.set(kind, []);
     byKind.get(kind)!.push(memory);
@@ -60,34 +63,47 @@ function generateIndexMd(memories: Memory[]): string {
     lines.push("");
   }
 
+  if (abandoned.length > 0) {
+    lines.push("## Do not reintroduce", "");
+    for (const memory of abandoned) {
+      lines.push(`- **${memory.frontmatter.id}**: Do not reintroduce: ${extractTitle(memory.body)}`);
+    }
+    lines.push("");
+  }
+
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-export function generateAgentsMdBlock(memories: Memory[]): string {
-  if (memories.length === 0) {
+export function generateCompactIndex(active: Memory[], abandoned: Memory[] = []): string {
+  if (active.length === 0 && abandoned.length === 0) {
     return "No active team memories.";
   }
 
   const header = [
     "## Team Memory",
     "",
-    `The team has ${memories.length} active memories from code review:`,
+    active.length > 0
+      ? `The team has ${active.length} active memories from code review:`
+      : "No active team memories.",
     "",
   ];
-  const footer = ["", "See `.memory/INDEX.md` for full details."];
-  const reserved = header.length + footer.length;
+  const footer = ["", "See `.memory/INDEX.md` for full details.", CLAUDE_INDEX_IMPORT];
+  const reserved = header.length + footer.length + (abandoned.length > 0 ? 3 : 0);
   const items: string[] = [];
 
-  for (const memory of memories) {
-    const title = extractTitle(memory.body);
-    const paths = memory.frontmatter.paths.length > 0
-      ? ` (${memory.frontmatter.paths.slice(0, 2).join(", ")})`
-      : "";
-    items.push(`- **${memory.frontmatter.id}**: ${title}${paths}`);
+  for (const memory of active) {
+    items.push(compactLine(memory));
     if (reserved + items.length + 1 > AGENTS_INDEX_MAX_LINES) {
       items.pop();
-      items.push(`- …and ${memories.length - items.length} more`);
+      items.push(`- …and ${active.length - items.length} more`);
       break;
+    }
+  }
+
+  if (abandoned.length > 0) {
+    items.push("", "### Do not reintroduce", "");
+    for (const memory of abandoned) {
+      items.push(`- **${memory.frontmatter.id}**: Do not reintroduce: ${extractTitle(memory.body)}`);
     }
   }
 
@@ -97,6 +113,20 @@ export function generateAgentsMdBlock(memories: Memory[]): string {
     return lines.slice(0, AGENTS_INDEX_MAX_LINES).join("\n");
   }
   return block;
+}
+
+export function generateAgentsMdBlock(memories: Memory[]): string {
+  const active = memories.filter((memory) => memory.frontmatter.status === "active");
+  const abandoned = memories.filter((memory) => memory.frontmatter.status === "abandoned");
+  return generateCompactIndex(active, abandoned);
+}
+
+function compactLine(memory: Memory): string {
+  const title = extractTitle(memory.body);
+  const paths = memory.frontmatter.paths.length > 0
+    ? ` (${memory.frontmatter.paths.slice(0, 2).join(", ")})`
+    : "";
+  return `- **${memory.frontmatter.id}**: ${title}${paths}`;
 }
 
 function generateClaudeRules(memories: Memory[]): Map<string, string> {
@@ -186,23 +216,33 @@ export async function writeCompiledFiles(
   written.push(indexPath);
 
   const agentsMdPath = path.join(projectDir, "AGENTS.md");
-  const updatedAgentsMd = replaceManagedBlock(
+  await writeAtomic(agentsMdPath, replaceManagedBlock(
     await readText(agentsMdPath),
     TEAMRECALL_START,
     TEAMRECALL_END,
     compiled.agents_md,
-  );
-  await writeAtomic(agentsMdPath, updatedAgentsMd);
+  ));
   written.push(agentsMdPath);
 
   const claudeMdPath = path.join(projectDir, "CLAUDE.md");
   if (await exists(claudeMdPath)) {
-    const currentClaudeMd = await readText(claudeMdPath);
-    if (!currentClaudeMd.includes(CLAUDE_INDEX_IMPORT)) {
-      await writeAtomic(claudeMdPath, `${currentClaudeMd.trimEnd()}\n\n${CLAUDE_INDEX_IMPORT}\n`);
-      written.push(claudeMdPath);
-    }
+    await writeAtomic(claudeMdPath, replaceManagedBlock(
+      await readText(claudeMdPath),
+      TEAMRECALL_START,
+      TEAMRECALL_END,
+      compiled.compact_index,
+    ));
+    written.push(claudeMdPath);
   }
+
+  const copilotPath = path.join(projectDir, ".github", "copilot-instructions.md");
+  await writeAtomic(copilotPath, replaceManagedBlock(
+    await readText(copilotPath),
+    TEAMRECALL_START,
+    TEAMRECALL_END,
+    compiled.compact_index,
+  ));
+  written.push(copilotPath);
 
   const claudeRulesDir = path.join(projectDir, ".claude", "rules", "teamrecall");
   await fs.mkdir(claudeRulesDir, { recursive: true });
@@ -223,6 +263,25 @@ export async function writeCompiledFiles(
   }
 
   return written;
+}
+
+export async function listStaleGeneratedRules(projectDir: string, activeIds: Set<string>): Promise<string[]> {
+  const stale: string[] = [];
+  const claudeDir = path.join(projectDir, ".claude", "rules", "teamrecall");
+  if (await exists(claudeDir)) {
+    for (const file of await fs.readdir(claudeDir)) {
+      const match = file.match(/^(M-\d+)\.md$/);
+      if (match && !activeIds.has(match[1])) stale.push(path.join(claudeDir, file));
+    }
+  }
+  const cursorDir = path.join(projectDir, ".cursor", "rules");
+  if (await exists(cursorDir)) {
+    for (const file of await fs.readdir(cursorDir)) {
+      const match = file.match(/^teamrecall-(M-\d+)\.mdc$/);
+      if (match && !activeIds.has(match[1])) stale.push(path.join(cursorDir, file));
+    }
+  }
+  return stale;
 }
 
 async function removeStaleRules(
