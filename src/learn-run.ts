@@ -3,12 +3,14 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { TEAMRECALL_PR_PREFIX } from "./constants.js";
+import { shouldLearnFromClosedPr } from "./human-comments.js";
 import {
   MANAGED_GIT_PATHS,
   assertManagedPathsClean,
   commandExists,
   fetchPullRequest,
   openPullRequest,
+  startPointForBotBranch,
 } from "./github.js";
 import {
   buildLearnPrBody,
@@ -120,6 +122,28 @@ export async function runLearn(input: {
   const fetchPr = input.deps?.fetchPr ?? fetchPullRequest;
   const context = await fetchPr(input.pr, projectDir);
 
+  if (!shouldLearnFromClosedPr(context)) {
+    return {
+      plan: {
+        action: "no_op",
+        outcomes: [{
+          action: "no_op",
+          reasoning: "Closed unmerged PR has no human review comments",
+        }],
+        mutations: [],
+        learned: 0,
+        updated: 0,
+        retired: 0,
+        conflicts: [],
+        distiller: "llm",
+        summary: `skipped unmerged #${context.number} (no human review comments)`,
+      },
+      written: [],
+      deleted: [],
+      skipped: "unmerged-without-human-comments",
+    };
+  }
+
   if (context.title.startsWith(TEAMRECALL_PR_PREFIX)) {
     const memories = await loadMemories(projectDir);
     const compiled = await compileMemories(projectDir, memories);
@@ -198,6 +222,7 @@ export async function runLearn(input: {
       body: buildLearnPrBody(plan, context),
       files: [...MANAGED_GIT_PATHS],
       force: true,
+      startPoint: await startPointForBotBranch(projectDir),
     });
   }
 

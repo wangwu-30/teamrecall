@@ -108,6 +108,8 @@ export async function backfillProject(
         author: "teamrecall",
         diff: "",
         review_comments: [],
+        human_review_comments: [],
+        merged: true,
         commit_messages: [],
         commits: [],
         files: [source],

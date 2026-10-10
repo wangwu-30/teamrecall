@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import * as path from "node:path";
 import { exists } from "./utils/atomic.js";
 import { getCurrentBranch, gitHasRemote } from "./utils/git.js";
+import { humanCommentBodies, type AuthoredComment } from "./human-comments.js";
 import type { PullRequestContext } from "./types.js";
 
 const exec = promisify(execFile);
@@ -29,7 +30,7 @@ async function run(command: string, args: string[], cwd: string): Promise<string
 export async function fetchPullRequest(pr: string, cwd: string): Promise<PullRequestContext> {
   const view = JSON.parse(await run("gh", [
     "pr", "view", pr, "--json",
-    "number,title,body,url,author,commits,files",
+    "number,title,body,url,author,commits,files,mergedAt,state",
   ], cwd)) as {
     number: number;
     title: string;
@@ -38,6 +39,8 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
     author?: { login?: string };
     commits?: Array<{ oid?: string; messageHeadline?: string }>;
     files?: Array<{ path?: string }>;
+    mergedAt?: string | null;
+    state?: string;
   };
 
   let diff = "";
@@ -47,7 +50,12 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
     diff = "";
   }
 
-  const review_comments = await fetchReviewComments(pr, cwd);
+  const authored = await fetchAuthoredComments(pr, cwd);
+  const human_review_comments = humanCommentBodies(authored);
+  const merged = Boolean(view.mergedAt) || view.state === "MERGED";
+  const review_comments = merged
+    ? unique(authored.map((comment) => comment.body.trim()).filter(Boolean))
+    : human_review_comments;
   const commits = (view.commits ?? []).map((commit) => commit.oid).filter((oid): oid is string => Boolean(oid));
   const commit_messages = (view.commits ?? [])
     .map((commit) => commit.messageHeadline)
@@ -60,44 +68,59 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
     url: view.url ?? "",
     author: view.author?.login ?? "unknown",
     diff,
+    merged,
     review_comments,
+    human_review_comments,
     commit_messages,
     commits,
     files: (view.files ?? []).map((file) => file.path).filter((item): item is string => Boolean(item)),
   };
 }
 
-async function fetchReviewComments(pr: string, cwd: string): Promise<string[]> {
-  const comments: string[] = [];
+export async function fetchAuthoredComments(pr: string, cwd: string): Promise<AuthoredComment[]> {
+  const comments: AuthoredComment[] = [];
+  const endpoints = [
+    `repos/{owner}/{repo}/issues/${pr}/comments`,
+    `repos/{owner}/{repo}/pulls/${pr}/comments`,
+    `repos/{owner}/{repo}/pulls/${pr}/reviews`,
+  ];
+  for (const endpoint of endpoints) {
+    try {
+      const rows = JSON.parse(await run("gh", [
+        "api",
+        endpoint,
+        "--jq", "[.[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type}]",
+      ], cwd)) as AuthoredComment[];
+      comments.push(...rows.filter((comment) => comment.body?.trim()));
+    } catch {
+      // Fine when the token cannot read that collection.
+    }
+  }
+
+  if (comments.length > 0) return comments;
+
   try {
     const issue = JSON.parse(await run("gh", [
       "pr", "view", pr, "--json", "reviews,comments",
     ], cwd)) as {
-      reviews?: Array<{ body?: string }>;
-      comments?: Array<{ body?: string }>;
+      reviews?: Array<{ body?: string; author?: { login?: string } }>;
+      comments?: Array<{ body?: string; author?: { login?: string } }>;
     };
     for (const review of issue.reviews ?? []) {
-      if (review.body?.trim()) comments.push(review.body.trim());
+      if (review.body?.trim()) {
+        comments.push({ body: review.body.trim(), author: review.author?.login ?? "" });
+      }
     }
     for (const comment of issue.comments ?? []) {
-      if (comment.body?.trim()) comments.push(comment.body.trim());
+      if (comment.body?.trim()) {
+        comments.push({ body: comment.body.trim(), author: comment.author?.login ?? "" });
+      }
     }
   } catch {
-    // Optional: inline review comments via the REST API when available.
+    // Optional fallback when REST is unavailable.
   }
 
-  try {
-    const inline = JSON.parse(await run("gh", [
-      "api",
-      `repos/{owner}/{repo}/pulls/${pr}/comments`,
-      "--jq", "[.[].body]",
-    ], cwd)) as string[];
-    comments.push(...inline.filter(Boolean));
-  } catch {
-    // Fine when the token cannot read review threads.
-  }
-
-  return unique(comments);
+  return comments;
 }
 
 export async function listMergedPullRequests(cwd: string, limit: number): Promise<string[]> {
@@ -152,6 +175,38 @@ export interface OpenPrInput {
   base?: string;
   force?: boolean;
   startPoint?: string;
+}
+
+export async function getDefaultBranch(cwd: string): Promise<string> {
+  try {
+    const ref = (await run("git", ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd)).trim();
+    const name = ref.replace(/^refs\/remotes\/origin\//, "");
+    if (name) return name;
+  } catch {
+    // origin/HEAD is not always set.
+  }
+  try {
+    const head = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).trim();
+    if (head && head !== "HEAD") return head;
+  } catch {
+    // Detached HEAD.
+  }
+  return "main";
+}
+
+export async function startPointForBotBranch(cwd: string): Promise<string | undefined> {
+  const def = await getDefaultBranch(cwd);
+  try {
+    await run("git", ["rev-parse", "--verify", `origin/${def}`], cwd);
+    return `origin/${def}`;
+  } catch {
+    try {
+      await run("git", ["rev-parse", "--verify", def], cwd);
+      return def;
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 export function gitPushArgs(branch: string, options?: { force?: boolean }): string[] {
