@@ -40,6 +40,7 @@ export {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
+export { humanCommentBodies, isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
 export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, createOrReusePullRequest, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges } from "./github.js";
 export {
   clampBody,

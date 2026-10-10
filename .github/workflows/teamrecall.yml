@@ -17,7 +17,12 @@ env:
 
 jobs:
   learn:
-    if: github.event.pull_request.merged == true
+    # Merged PRs always. Closed-unmerged PRs only when comments already exist;
+    # `learn --ci` then skips unless at least one comment is from a human.
+    if: >
+      github.event.pull_request.merged == true ||
+      github.event.pull_request.comments > 0 ||
+      github.event.pull_request.review_comments > 0
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +46,7 @@ jobs:
             echo "TEAMRECALL_BIN=npx -y github:wangwu-30/teamrecall#${TEAMRECALL_REF}" >> "$GITHUB_ENV"
           fi
 
-      - name: Learn from merged PR
+      - name: Learn from closed PR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

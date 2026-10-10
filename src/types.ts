@@ -58,7 +58,9 @@ export interface PullRequestContext {
   url: string;
   author: string;
   diff: string;
+  merged: boolean;
   review_comments: string[];
+  human_review_comments: string[];
   commit_messages: string[];
   commits: string[];
   files: string[];

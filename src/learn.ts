@@ -66,7 +66,8 @@ export function generateDistillationPrompt(input: LearnInput): string {
     .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)} (paths: ${memory.frontmatter.paths.join(", ")})`)
     .join("\n");
 
-  return `You are reviewing a merged pull request to extract reusable engineering knowledge for the team.
+  return `You are reviewing a closed pull request to extract reusable engineering knowledge for the team.
+This PR may be merged or closed without merging. Human review comments are valid evidence either way.
 
 PR #${input.pr_number}
 
@@ -384,6 +385,12 @@ export function buildLearnPrBody(plan: LearnPlan, context: PullRequestContext): 
 
   return [
     `Auto-learned from #${context.number} (\`${context.title}\`).`,
+    ...(context.merged
+      ? []
+      : [
+          "",
+          "This PR was closed without merging. Human review comments are treated as evidence the same way as on merged PRs.",
+        ]),
     "",
     "| Memory | Action | PR | Review | Commits |",
     "| --- | --- | --- | --- | --- |",

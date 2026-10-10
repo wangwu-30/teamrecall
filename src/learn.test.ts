@@ -27,6 +27,7 @@ import {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
+import { isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
 import { MANAGED_GIT_PATHS } from "./github.js";
 import { parseMemory } from "./memory.js";
 import type { Memory, PullRequestContext } from "./types.js";
@@ -49,6 +50,9 @@ function memory(id: string, body: string, paths = ["src/**/*.ts"]): Memory {
 }
 
 function context(partial: Partial<PullRequestContext> = {}): PullRequestContext {
+  const review_comments = partial.review_comments ?? [
+    "Retries should only happen in the gateway wrapper, not the service layer.",
+  ];
   return {
     number: "42",
     title: "Move retries to the gateway",
@@ -56,11 +60,15 @@ function context(partial: Partial<PullRequestContext> = {}): PullRequestContext 
     url: "https://github.com/acme/app/pull/42",
     author: "alice",
     diff: "diff --git a/src/gateway.ts b/src/gateway.ts",
-    review_comments: ["Retries should only happen in the gateway wrapper, not the service layer."],
+    merged: true,
+    review_comments,
+    human_review_comments: review_comments,
     commit_messages: ["fix ci: register retry in wrapper"],
     commits: ["abc123"],
     files: ["src/gateway.ts"],
     ...partial,
+    review_comments: partial.review_comments ?? review_comments,
+    human_review_comments: partial.human_review_comments ?? partial.review_comments ?? review_comments,
   };
 }
 
@@ -166,6 +174,104 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     }, existing, context(), "/tmp/project");
     expect(planned.retired).toBe(1);
     expect(planned.mutations.some((mutation) => mutation.delete && mutation.path === existing[0].filepath)).toBe(true);
+  });
+});
+
+describe("closed unmerged PRs", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  });
+
+  it("treats [bot] and user.type=Bot as non-human", () => {
+    expect(isBotAuthor("alice")).toBe(false);
+    expect(isBotAuthor("cursor[bot]")).toBe(true);
+    expect(isBotAuthor("dependabot[bot]")).toBe(true);
+    expect(isBotAuthor("copilot", "Bot")).toBe(true);
+    expect(isBotAuthor("Copilot", "BOT")).toBe(true);
+    expect(isBotAuthor("renovate-bot")).toBe(true);
+    expect(isBotAuthor("")).toBe(false);
+  });
+
+  it("learns from unmerged PRs only when a human left a review comment", () => {
+    expect(shouldLearnFromClosedPr({ merged: true, human_review_comments: [] })).toBe(true);
+    expect(shouldLearnFromClosedPr({ merged: false, human_review_comments: [] })).toBe(false);
+    expect(shouldLearnFromClosedPr({
+      merged: false,
+      human_review_comments: ["Please disclose AI use and open an issue with a repro first."],
+    })).toBe(true);
+  });
+
+  it("skips learn on a closed unmerged PR with no human comments", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-unmerged-skip-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    let distilled = false;
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "99",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context({
+          number: "99",
+          title: "AI generated tests",
+          merged: false,
+          review_comments: ["Automated review: looks fine"],
+          human_review_comments: [],
+        }),
+        distill: async () => {
+          distilled = true;
+          return JSON.stringify({ action: "new", reasoning: "should not run" });
+        },
+      },
+    });
+    expect(result.skipped).toBe("unmerged-without-human-comments");
+    expect(result.plan.learned).toBe(0);
+    expect(distilled).toBe(false);
+    const files = await fs.readdir(path.join(dir, ".memory", "memories"));
+    expect(files).toEqual([]);
+  });
+
+  it("learns from human comments on a PR closed without merging", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-unmerged-learn-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    const comment = "Please disclose AI use and open an issue with a repro first before sending another PR.";
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "77",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context({
+          number: "77",
+          title: "Add vitest coverage",
+          merged: false,
+          review_comments: [comment],
+          human_review_comments: [comment],
+        }),
+        distill: async () => JSON.stringify({
+          action: "new",
+          title: "Disclose AI use",
+          kind: "convention",
+          paths: ["**/*"],
+          body: comment,
+          reasoning: "Recurring human review on closed AI PRs",
+        }),
+      },
+    });
+    expect(result.skipped).toBeUndefined();
+    expect(result.plan.learned).toBe(1);
+    const files = await fs.readdir(path.join(dir, ".memory", "memories"));
+    expect(files.some((file) => file.startsWith("M-001"))).toBe(true);
+    const parsed = parseMemory(await fs.readFile(path.join(dir, ".memory", "memories", files[0]), "utf8"));
+    expect(parsed?.frontmatter.evidence.pr).toBe("#77");
+    expect(parsed?.frontmatter.evidence.review_url).toBe("https://github.com/acme/app/pull/42");
+    expect(buildLearnPrBody(result.plan, context({
+      number: "77",
+      merged: false,
+      review_comments: [comment],
+      human_review_comments: [comment],
+    }))).toMatch(/closed without merging/i);
   });
 });
 
