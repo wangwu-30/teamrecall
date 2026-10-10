@@ -36,6 +36,8 @@ export interface PathConflict {
   existing_id: string;
 }
 
+export type DistillerKind = "llm" | "deterministic";
+
 export interface LearnPlan {
   action: LearnOutcome["action"];
   outcomes: LearnOutcome[];
@@ -44,6 +46,7 @@ export interface LearnPlan {
   updated: number;
   retired: number;
   conflicts: PathConflict[];
+  distiller: DistillerKind;
   summary: string;
 }
 
@@ -224,6 +227,7 @@ export function planLearnOutcomes(
     updated,
     retired,
     conflicts,
+    distiller: "llm",
     summary: buildSummary(learned, updated, retired, context.number),
   };
 }
@@ -386,8 +390,19 @@ export function buildLearnPrBody(plan: LearnPlan, context: PullRequestContext): 
     "Only `.memory/` and compiled agent files are touched.",
     "",
     plan.outcomes.map((outcome) => `- **${outcome.action}** ${outcome.memory_id ?? ""}: ${outcome.reasoning}`).join("\n"),
+    ...deterministicSection(plan),
     ...conflictSections(plan),
   ].join("\n");
+}
+
+export const DETERMINISTIC_DISTILLER_NOTE = [
+  "This run used the **deterministic distiller** because neither `CLAUDE_CODE_OAUTH_TOKEN` nor `OPENAI_API_KEY` was set.",
+  "Day-one learn works with zero secrets. Set `CLAUDE_CODE_OAUTH_TOKEN` after `claude setup-token` to enable LLM distillation.",
+].join("\n");
+
+function deterministicSection(plan: LearnPlan): string[] {
+  if (plan.distiller !== "deterministic") return [];
+  return ["", "## Distiller", "", DETERMINISTIC_DISTILLER_NOTE];
 }
 
 function conflictSections(plan: LearnPlan): string[] {

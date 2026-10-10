@@ -26,6 +26,7 @@ export interface LearnRunDeps {
   fetchPr?: (pr: string, cwd: string) => Promise<PullRequestContext>;
   distill?: (prompt: string) => Promise<string>;
   openPr?: typeof openPullRequest;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface LearnRunResult {
@@ -41,6 +42,10 @@ export const CLAUDE_DISALLOWED_TOOLS =
 
 export function shouldOpenLearnPr(flags: { ci?: boolean; pr?: boolean }): boolean {
   return Boolean(flags.ci || flags.pr);
+}
+
+export function hasLlmSecret(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.CLAUDE_CODE_OAUTH_TOKEN?.trim() || env.OPENAI_API_KEY?.trim());
 }
 
 export function sanitisedChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -127,6 +132,7 @@ export async function runLearn(input: {
         updated: 0,
         retired: 0,
         conflicts: [],
+        distiller: "llm",
         summary: `recompiled from #${context.number}`,
       },
       written,
@@ -147,16 +153,25 @@ export async function runLearn(input: {
   });
 
   let outcome: LearnOutcome;
-  try {
-    const raw = input.deps?.distill
-      ? await input.deps.distill(prompt)
-      : await distillWithAvailableEngine(prompt);
-    outcome = parseDistillationResponse(raw);
-  } catch {
+  let distiller: LearnPlan["distiller"] = "llm";
+  const env = input.deps?.env ?? process.env;
+  if (!input.deps?.distill && !hasLlmSecret(env)) {
     outcome = fallbackOutcomeFromReviews(context);
+    distiller = "deterministic";
+  } else {
+    try {
+      const raw = input.deps?.distill
+        ? await input.deps.distill(prompt)
+        : await distillWithAvailableEngine(prompt);
+      outcome = parseDistillationResponse(raw);
+    } catch {
+      outcome = fallbackOutcomeFromReviews(context);
+      distiller = "deterministic";
+    }
   }
 
   const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days);
+  plan.distiller = distiller;
   const { written, deleted } = await applyMutations(plan);
 
   const nextMemories = await loadMemories(projectDir);

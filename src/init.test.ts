@@ -4,7 +4,15 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectRuleSources, extractRuleLessons } from "./backfill.js";
 import { runDoctor } from "./doctor.js";
-import { initProject, loadWorkflowTemplate } from "./init.js";
+import {
+  HUMAN_ACTIONS_SETTING,
+  HUMAN_SECRET_COMMAND,
+  humanOnboardingActions,
+  initProject,
+  loadWorkflowTemplate,
+  runInitCommand,
+  toInitJson,
+} from "./init.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -30,10 +38,83 @@ describe("initProject", () => {
     await expect(fs.readFile(path.join(dir, ".github", "copilot-instructions.md"), "utf8")).resolves.toContain("teamrecall:start");
   });
 
-  it("refuses to re-init", async () => {
+  it("re-runs without throwing and without duplicating memories", async () => {
+    const dir = await tmp();
+    await fs.writeFile(
+      path.join(dir, "CLAUDE.md"),
+      "## Retries\n\nNever retry in the service layer; register retries only in the gateway wrapper so callers see one policy.\n",
+      "utf8",
+    );
+    const first = await initProject(dir, { backfill: true, openPr: false });
+    expect(first.reused).toBe(false);
+    const memories = path.join(dir, ".memory", "memories");
+    const before = await fs.readdir(memories);
+    expect(before.length).toBeGreaterThan(0);
+
+    const second = await initProject(dir, { backfill: true, openPr: false });
+    expect(second.reused).toBe(true);
+    expect(second.skipped).toContain(path.join(dir, ".memory"));
+    expect(second.skipped).toContain("backfill");
+    const after = await fs.readdir(memories);
+    expect(after).toEqual(before);
+  });
+
+  it("does not roll back an existing .memory/ if a later step fails", async () => {
     const dir = await tmp();
     await initProject(dir, { backfill: false, openPr: false });
-    await expect(initProject(dir)).rejects.toThrow("already exists");
+    await fs.rm(path.join(dir, "AGENTS.md"));
+    await fs.mkdir(path.join(dir, "AGENTS.md"), { recursive: true });
+    await expect(initProject(dir, { backfill: false, openPr: false })).rejects.toThrow();
+    await expect(fs.access(path.join(dir, ".memory", "config.yml"))).resolves.toBeUndefined();
+  });
+
+  it("prints a machine-readable --json summary and default --yes human actions", async () => {
+    const dir = await tmp();
+    const summary = await runInitCommand({
+      projectDir: dir,
+      backfill: false,
+      skipPr: true,
+      json: true,
+      yes: true,
+    });
+    expect(summary.ok).toBe(true);
+    expect(summary.reused).toBe(false);
+    expect(summary.created).toEqual(expect.arrayContaining([
+      path.join(".memory", "config.yml"),
+      path.join(".github", "workflows", "teamrecall.yml"),
+    ]));
+    expect(summary.human_actions).toEqual([HUMAN_SECRET_COMMAND, HUMAN_ACTIONS_SETTING]);
+    expect(summary.pr_url).toBeNull();
+    expect(summary.doctor?.ok).toBe(true);
+    expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
+
+    const again = await runInitCommand({
+      projectDir: dir,
+      backfill: false,
+      skipPr: true,
+      json: true,
+      yes: true,
+    });
+    expect(again.ok).toBe(true);
+    expect(again.reused).toBe(true);
+    expect(again.skipped.length).toBeGreaterThan(0);
+  });
+
+  it("lists only the Actions setting when the secret is already set", () => {
+    expect(humanOnboardingActions(true)).toEqual([HUMAN_ACTIONS_SETTING]);
+    const encoded = toInitJson({
+      result: {
+        created: [],
+        written: [],
+        skipped: [],
+        reused: true,
+        message: "ok",
+        secret_set: true,
+      },
+      projectDir: "/tmp/x",
+    });
+    expect(encoded.human_actions).toEqual([HUMAN_ACTIONS_SETTING]);
+    expect(encoded.secret_set).toBe(true);
   });
 
   it("copies the workflow template instead of an inline copy", async () => {

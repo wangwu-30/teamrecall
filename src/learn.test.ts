@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const exec = promisify(execFile);
 import {
+  DETERMINISTIC_DISTILLER_NOTE,
   buildLearnPrBody,
   buildLearnPrTitle,
   checkDuplicate,
@@ -19,6 +20,7 @@ import {
 } from "./learn.js";
 import {
   claudeDistillArgs,
+  hasLlmSecret,
   runLearn,
   runWithStdin,
   sanitisedChildEnv,
@@ -166,6 +168,16 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
   });
 });
 
+describe("hasLlmSecret", () => {
+  it("is false unless CLAUDE_CODE_OAUTH_TOKEN or OPENAI_API_KEY is set", () => {
+    expect(hasLlmSecret({})).toBe(false);
+    expect(hasLlmSecret({ CLAUDE_CODE_OAUTH_TOKEN: "  " })).toBe(false);
+    expect(hasLlmSecret({ OPENAI_API_KEY: "" })).toBe(false);
+    expect(hasLlmSecret({ CLAUDE_CODE_OAUTH_TOKEN: "oauth" })).toBe(true);
+    expect(hasLlmSecret({ OPENAI_API_KEY: "sk-test" })).toBe(true);
+  });
+});
+
 describe("fallbackOutcomeFromReviews", () => {
   it("creates a new memory from a directive review comment", () => {
     const outcome = fallbackOutcomeFromReviews(context());
@@ -277,6 +289,61 @@ Old rule that should be retired.`, "utf8");
     await expect(fs.access(filepath)).rejects.toThrow();
     expect(opened?.files).toEqual(MANAGED_GIT_PATHS);
     expect(opened?.title).toBe("🧠 teamrecall: retired 1 (from #42)");
+  });
+
+  it("uses the deterministic distiller when no LLM secrets are set and says so in the PR body", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-nosecret-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "memories", ".gitkeep"), "", "utf8");
+    await exec("git", ["init", "-b", "main"], { cwd: dir });
+    await exec("git", ["add", "-A"], { cwd: dir });
+    await exec("git", ["-c", "user.name=tester", "-c", "user.email=tester@example.test", "commit", "-m", "seed"], { cwd: dir });
+
+    let opened: { body?: string } | undefined;
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: true,
+      deps: {
+        fetchPr: async () => context(),
+        env: { PATH: process.env.PATH ?? "/usr/bin" },
+        openPr: async (input) => {
+          opened = input;
+          return "https://example.test/pr/2";
+        },
+      },
+    });
+
+    expect(result.plan.distiller).toBe("deterministic");
+    expect(result.plan.learned).toBe(1);
+    expect(opened?.body).toContain("deterministic distiller");
+    expect(opened?.body).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(opened?.body).toContain("OPENAI_API_KEY");
+    expect(opened?.body).toContain("zero secrets");
+    expect(opened?.body).toContain(DETERMINISTIC_DISTILLER_NOTE.split("\n")[0]);
+  });
+
+  it("keeps using an injected LLM distiller when a secret is present", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-secret-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context(),
+        env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
+        distill: async () => JSON.stringify({
+          action: "no_op",
+          reasoning: "LLM decided no-op",
+        }),
+      },
+    });
+    expect(result.plan.distiller).toBe("llm");
+    expect(result.plan.action).toBe("no_op");
+    expect(buildLearnPrBody(result.plan, context())).not.toContain("deterministic distiller");
   });
 
   it("refuses local learn --pr when managed paths are dirty", async () => {

@@ -9,8 +9,17 @@ export {
   TEAMRECALL_START,
 } from "./constants.js";
 export { runDoctor } from "./doctor.js";
-export { initProject, loadSweepWorkflowTemplate } from "./init.js";
 export {
+  HUMAN_ACTIONS_SETTING,
+  HUMAN_SECRET_COMMAND,
+  humanOnboardingActions,
+  initProject,
+  loadSweepWorkflowTemplate,
+  runInitCommand,
+  toInitJson,
+} from "./init.js";
+export {
+  DETERMINISTIC_DISTILLER_NOTE,
   buildLearnPrBody,
   buildLearnPrTitle,
   checkDuplicate,
@@ -25,6 +34,7 @@ export {
 export {
   CLAUDE_DISALLOWED_TOOLS,
   claudeDistillArgs,
+  hasLlmSecret,
   runLearn,
   sanitisedChildEnv,
   shouldOpenLearnPr,
