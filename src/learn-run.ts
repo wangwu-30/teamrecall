@@ -126,6 +126,7 @@ export async function runLearn(input: {
         learned: 0,
         updated: 0,
         retired: 0,
+        conflicts: [],
         summary: `recompiled from #${context.number}`,
       },
       written,

@@ -8,6 +8,7 @@ import { openPullRequest } from "./github.js";
 import { initProject } from "./init.js";
 import { runLearn, shouldOpenLearnPr } from "./learn-run.js";
 import { loadMemories } from "./memory.js";
+import { formatSweepReport, runSweep } from "./sweep.js";
 
 program
   .name("teamrecall")
@@ -128,6 +129,23 @@ program
         console.log(`- ${outcome.action}${outcome.memory_id ? ` ${outcome.memory_id}` : ""}: ${outcome.reasoning}`);
       }
       if (result.pr_url) console.log(`PR: ${result.pr_url}`);
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("sweep")
+  .description("Flag expired and path-dead memories; optionally open a review PR")
+  .option("-d, --dir <path>", "Project directory", process.cwd())
+  .option("--pr", "Open a PR proposing retirement and a review checklist")
+  .action(async (options) => {
+    try {
+      const projectDir = path.resolve(options.dir);
+      const report = await runSweep({ projectDir, openPr: Boolean(options.pr) });
+      process.stdout.write(formatSweepReport(report));
+      if (report.pr_url) console.log(`PR: ${report.pr_url}`);
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);

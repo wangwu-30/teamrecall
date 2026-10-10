@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 import { DEFAULT_TTL_DAYS, MAX_BODY_WORDS } from "./constants.js";
-import type { Memory, MemoryFrontmatter, MemoryKind, TeamRecallConfig } from "./types.js";
+import type { Memory, MemoryFrontmatter, MemoryKind, MemoryStatus, TeamRecallConfig } from "./types.js";
 import { exists } from "./utils/atomic.js";
 
 const DEFAULT_CONFIG: TeamRecallConfig = {
@@ -11,6 +11,7 @@ const DEFAULT_CONFIG: TeamRecallConfig = {
 };
 
 const KINDS: MemoryKind[] = ["gotcha", "decision", "convention", "map"];
+const STATUSES: MemoryStatus[] = ["active", "retired", "superseded", "abandoned"];
 
 export async function loadConfig(projectDir: string): Promise<TeamRecallConfig> {
   const configPath = path.join(projectDir, ".memory", "config.yml");
@@ -77,8 +78,24 @@ export function isValidFrontmatter(fm: unknown): fm is MemoryFrontmatter {
     typeof value.author === "string" &&
     typeof value.created === "string" &&
     typeof value.review_after === "string" &&
-    (value.status === "active" || value.status === "retired")
+    STATUSES.includes(value.status as MemoryStatus) &&
+    (value.status !== "superseded" || (typeof value.superseded_by === "string" && /^M-\d+$/.test(value.superseded_by)))
   );
+}
+
+export function validateSupersededBy(memories: Memory[]): string[] {
+  const ids = new Set(memories.map((memory) => memory.frontmatter.id));
+  const errors: string[] = [];
+  for (const memory of memories) {
+    if (memory.frontmatter.status !== "superseded") continue;
+    const target = memory.frontmatter.superseded_by;
+    if (!target) {
+      errors.push(`${memory.frontmatter.id} is superseded but missing superseded_by`);
+    } else if (!ids.has(target)) {
+      errors.push(`${memory.frontmatter.id} superseded_by ${target} does not exist`);
+    }
+  }
+  return errors;
 }
 
 export function countWords(text: string): number {

@@ -1,5 +1,5 @@
 export type MemoryKind = "gotcha" | "decision" | "convention" | "map";
-export type MemoryStatus = "active" | "retired";
+export type MemoryStatus = "active" | "retired" | "superseded" | "abandoned";
 export type LearnAction = "reuse" | "update" | "merge" | "propose_retire" | "new" | "no_op";
 
 export interface MemoryFrontmatter {
@@ -15,6 +15,7 @@ export interface MemoryFrontmatter {
   created: string;
   review_after: string;
   status: MemoryStatus;
+  superseded_by?: string;
 }
 
 export interface Memory {
@@ -38,11 +39,14 @@ export interface LearnOutcome {
   body?: string;
   reasoning: string;
   memories?: LearnOutcome[];
+  contradicts?: boolean;
+  conflict_with?: string;
 }
 
 export interface CompiledOutput {
   agents_md: string;
   index_md: string;
+  compact_index: string;
   claude_rules: Map<string, string>;
   cursor_rules: Map<string, string>;
 }

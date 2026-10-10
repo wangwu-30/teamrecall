@@ -25,7 +25,9 @@ describe("initProject", () => {
     await expect(fs.stat(path.join(dir, ".memory", "memories"))).resolves.toBeTruthy();
     await expect(fs.stat(path.join(dir, ".memory", "retired"))).resolves.toBeTruthy();
     await expect(fs.readFile(path.join(dir, ".github", "workflows", "teamrecall.yml"), "utf8")).resolves.toContain("teamrecall");
+    await expect(fs.readFile(path.join(dir, ".github", "workflows", "teamrecall-sweep.yml"), "utf8")).resolves.toContain("sweep --pr");
     await expect(fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).resolves.toContain("teamrecall:start");
+    await expect(fs.readFile(path.join(dir, ".github", "copilot-instructions.md"), "utf8")).resolves.toContain("teamrecall:start");
   });
 
   it("refuses to re-init", async () => {
@@ -106,5 +108,21 @@ describe("runDoctor", () => {
     const after = await runDoctor(dir);
     expect(after.checks.find((check) => check.name === "memory_directory")?.ok).toBe(true);
     expect(after.checks.find((check) => check.name === "memories_directory")?.ok).toBe(true);
+    expect(after.checks.find((check) => check.name === "agents_md_block")?.ok).toBe(true);
+    expect(after.checks.find((check) => check.name === "copilot_block")?.ok).toBe(true);
+    expect(after.checks.some((check) => check.name === "claude_cli")).toBe(true);
+    expect(after.checks.some((check) => check.name === "codex_cli")).toBe(true);
+    expect(after.checks.find((check) => check.name === "stale_generated_rules")?.ok).toBe(true);
+  });
+
+  it("flags a missing CLAUDE.md managed block and stale generated rules", async () => {
+    const dir = await tmp();
+    await initProject(dir, { backfill: false, openPr: false });
+    await fs.writeFile(path.join(dir, "CLAUDE.md"), "# no block\n", "utf8");
+    await fs.mkdir(path.join(dir, ".claude", "rules", "teamrecall"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".claude", "rules", "teamrecall", "M-099.md"), "stale\n", "utf8");
+    const result = await runDoctor(dir);
+    expect(result.checks.find((check) => check.name === "claude_md_block")?.ok).toBe(false);
+    expect(result.checks.find((check) => check.name === "stale_generated_rules")?.ok).toBe(false);
   });
 });

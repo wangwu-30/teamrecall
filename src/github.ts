@@ -129,6 +129,7 @@ export const MANAGED_GIT_PATHS = [
   ".memory",
   "AGENTS.md",
   "CLAUDE.md",
+  ".github/copilot-instructions.md",
   ".claude/rules/teamrecall",
   ".cursor/rules",
 ];
