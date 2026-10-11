@@ -119,7 +119,10 @@ export function selectPromptCandidates(
     ? input.reviewer_comments
     : input.review_comments.map((body) => ({ body, path: undefined as string | undefined })));
   const queries = comments.length > 0 ? comments : [{ body: [input.title, input.body].filter(Boolean).join(" "), path: undefined }];
-  const docs = open.map((candidate) => tokenize(`${candidate.gist} ${candidate.terms.join(" ")}`));
+  // Candidate gists/terms are lower-cased before splitting, so `onTestFinished` is stored as "ontestfinished".
+  // Index and query both camel-split tokens and whole lower-cased words so identifiers match either way.
+  const both = (text: string) => [...tokenize(text), ...extractTerms(text)];
+  const docs = open.map((candidate) => both(`${candidate.gist} ${candidate.terms.join(" ")}`));
   const index = buildBm25Index(docs);
   const meta = open.map((candidate) => ({
     files: new Set(candidate.files),
@@ -129,7 +132,7 @@ export function selectPromptCandidates(
   const perComment = Math.min(CANDIDATE_PROMPT_PER_COMMENT, k);
   const perCommentRanked: Array<Array<{ candidate: ReviewCandidate; score: number }>> = [];
   for (const comment of queries) {
-    const raw = bm25ScoresFromIndex(tokenize(comment.body), index);
+    const raw = bm25ScoresFromIndex(both(comment.body), index);
     const commentFiles = comment.path ? [comment.path] : (input.files ?? []);
     const ranked = open
       .map((candidate, docIndex) => ({
@@ -442,7 +445,8 @@ export function allowAlways(
   reviewers: string[] = [],
 ): boolean {
   if (pathsSource === "human") return true;
-  return prs.length >= 2 && unique(reviewers).length >= 2;
+  // Same maintainer repeating a process rule on >=3 distinct PRs is strong evidence too (e.g. vitest's AI-disclosure policy).
+  return (prs.length >= 2 && unique(reviewers).length >= 2) || prs.length >= 3;
 }
 
 export function gateAlwaysScope(

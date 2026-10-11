@@ -45,6 +45,24 @@ describe("normalizeGist / extractTerms", () => {
       expect.arrayContaining(["https", "github", "com", "pull"]),
     );
   });
+
+  it("keeps suggestion-block and inline-code contents in the gist", () => {
+    const suggestionOnly = normalizeGist("```suggestion\nuse Box<T>\n```");
+    expect(suggestionOnly).not.toBe("");
+    expect(suggestionOnly).toContain("box");
+    expect(suggestionOnly).toContain("suggestion");
+
+    const suggestionIdent = normalizeGist("```suggestion\nawait onTestFinished()\n```");
+    expect(suggestionIdent).toContain("ontestfinished");
+
+    const fencedTilde = normalizeGist("~~~suggestion\nexpectTypeOf(value).toEqualTypeOf<string>()\n~~~");
+    expect(fencedTilde).toContain("expecttypeof");
+    expect(fencedTilde).toContain("toequaltypeof");
+
+    const inline = normalizeGist("Always call `onTestFinished` before cleanup.");
+    expect(inline).toContain("ontestfinished");
+    expect(inline).not.toMatch(/^always call before cleanup/);
+  });
 });
 
 describe("candidatesOverlap", () => {
@@ -196,6 +214,22 @@ describe("matchCandidate / prune / record", () => {
     expect(merged[0]?.id).toBe(id);
     expect(merged[0]?.promoted_to).toBe("M-001");
     expect(merged[0]?.date).toBe("2026-10-11");
+  });
+
+  it("records a suggestion-only comment instead of dropping an empty gist", () => {
+    const next = recordCandidates([], [{
+      body: "```suggestion\nuse Box<T>\n```",
+      author: "bob",
+      path: "src/box.ts",
+    }], {
+      pr: "42",
+      files: ["src/box.ts"],
+      date: "2026-10-11",
+      promoted: [],
+    });
+    expect(next).toHaveLength(1);
+    expect(next[0]?.gist).toContain("box");
+    expect(next[0]?.gist.length).toBeGreaterThan(0);
   });
 
   it("does not deterministically match two unrelated packages comments", () => {

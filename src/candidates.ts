@@ -37,10 +37,11 @@ export function stripUrlsAndMentions(text: string): string {
 
 export function normalizeGist(text: string): string {
   return stripUrlsAndMentions(text)
-    .toLowerCase()
+    .replace(/(?:```|~~~)suggestion[^\n]*\n?([\s\S]*?)(?:```|~~~)/gi, " suggestion $1 ")
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`[^`]+`/g, " ")
-    .replace(/[^a-z0-9.\s'-]/g, " ")
+    .replace(/`([^`]+)`/g, " $1 ")
+    .toLowerCase()
+    .replace(/[^a-z0-9.\s'<>\/_-]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, GIST_MAX_CHARS);

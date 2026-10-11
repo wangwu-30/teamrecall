@@ -29,6 +29,8 @@ import {
   planLearnOutcomes,
   selectPromptCandidates,
   selectPromptMemories,
+  allowAlways,
+  gateAlwaysScope,
 } from "./learn.js";
 import { CANDIDATE_PROMPT_FILES, CANDIDATE_PROMPT_K, PROMPT_COMMITS_CHARS, PROMPT_CONTEXT_CHARS, PROMPT_MEMORY_K, PROMPT_MEMORY_TITLE_CHARS } from "./constants.js";
 import { generateCandidateId, loadCandidates, normalizeGist } from "./candidates.js";
@@ -380,6 +382,37 @@ describe("generateDistillationPrompt", () => {
     expect(shown.length).toBeLessThanOrEqual(CANDIDATE_PROMPT_K);
     expect(shown.some((candidate) => candidate.id === hit.id)).toBe(true);
   });
+
+  it("matches a lowercased inline identifier that tokenize would camel-split", () => {
+    const hit = {
+      id: "C-ident0000001",
+      gist: "always invoke ontestfinished before cleanup",
+      terms: ["invoke", "ontestfinished", "before", "cleanup"],
+      files: ["packages/vitest/src/integrations/chai/timeout.ts"],
+      pr: "#110",
+      date: "2026-10-01",
+      reviewer: "sheremet-va",
+    };
+    const decoys = Array.from({ length: 80 }, (_, index) => ({
+      id: `C-d${index.toString(16).padStart(11, "0")}`,
+      gist: `always invoke helper before cleanup in test number ${index}`,
+      terms: ["invoke", "helper", "before", "cleanup", "test", `n${index}`],
+      files: [`packages/vitest/src/integrations/chai/helper_${index}.ts`],
+      pr: `#${index}`,
+      date: "2026-10-01",
+      reviewer: "bob",
+    }));
+    const shown = selectPromptCandidates([...decoys, hit], {
+      review_comments: ["Always invoke `onTestFinished` before cleanup."],
+      reviewer_comments: [{
+        body: "Always invoke `onTestFinished` before cleanup.",
+        path: "packages/vitest/src/integrations/chai/timeout.ts",
+      }],
+      files: ["packages/vitest/src/integrations/chai/timeout.ts"],
+    });
+    expect(shown.some((candidate) => candidate.id === hit.id)).toBe(true);
+    expect(shown.findIndex((candidate) => candidate.id === hit.id)).toBeLessThan(10);
+  });
 });
 
 describe("inferPaths", () => {
@@ -607,6 +640,54 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
       },
     }], context({ number: "10" }), "/tmp/project");
     expect(parseMemory(human.mutations[0]?.content ?? "")?.frontmatter.scope).toBe("always");
+  });
+
+  it("allows always for one maintainer after 3 distinct PRs, not after 2", () => {
+    expect(allowAlways("distiller", ["#1", "#2"], ["sheremet-va"])).toBe(false);
+    expect(allowAlways("distiller", ["#1", "#2", "#3"], ["sheremet-va"])).toBe(true);
+    expect(allowAlways("distiller", ["#1", "#2"], ["sheremet-va", "hi-ogawa"])).toBe(true);
+    expect(gateAlwaysScope("always", "distiller", ["#10", "#22"], ["bob"]).scope).toBe("triggered");
+    expect(gateAlwaysScope("always", "distiller", ["#10", "#22", "#33"], ["bob"]).scope).toBe("always");
+
+    const existing = [{
+      ...memory("M-001", "Disclose AI-generated content in the PR.", ["**"]),
+      frontmatter: {
+        ...memory("M-001", "Disclose AI-generated content in the PR.", ["**"]).frontmatter,
+        scope: "triggered" as const,
+        paths_source: "distiller" as const,
+        evidence: { pr: "#10", prs: ["#10", "#22"], reviewers: ["sheremet-va"] },
+      },
+    }];
+    const twice = planLearnOutcomes({
+      action: "update",
+      memory_id: "M-001",
+      scope: "always",
+      body: "Disclose AI-generated content in the PR.",
+      reasoning: "same maintainer twice",
+    }, [{
+      ...existing[0]!,
+      frontmatter: {
+        ...existing[0]!.frontmatter,
+        evidence: { pr: "#10", prs: ["#10"], reviewers: ["sheremet-va"] },
+      },
+    }], context({
+      number: "22",
+      reviewer_comments: [{ body: "Disclose AI-generated content in the PR.", author: "sheremet-va" }],
+    }), "/tmp/project");
+    expect(parseMemory(twice.mutations[0]?.content ?? "")?.frontmatter.scope).toBe("triggered");
+
+    const thrice = planLearnOutcomes({
+      action: "update",
+      memory_id: "M-001",
+      scope: "always",
+      body: "Disclose AI-generated content in the PR.",
+      reasoning: "same maintainer three times",
+    }, existing, context({
+      number: "33",
+      reviewer_comments: [{ body: "Disclose AI-generated content in the PR.", author: "sheremet-va" }],
+    }), "/tmp/project");
+    expect(parseMemory(thrice.mutations[0]?.content ?? "")?.frontmatter.scope).toBe("always");
+    expect(parseMemory(thrice.mutations[0]?.content ?? "")?.frontmatter.evidence.prs).toEqual(["#10", "#22", "#33"]);
   });
 
   it("keeps extension globs as triggered distiller paths", () => {
