@@ -8,3 +8,6 @@ export const AGENTS_INDEX_MAX_LINES = 40;
 export const DEFAULT_TTL_DAYS = 90;
 export const DEFAULT_BACKFILL_PRS = 30;
 export const TEAMRECALL_PR_PREFIX = "🧠 teamrecall:";
+export const CANDIDATE_TTL_DAYS = 180;
+export const CANDIDATE_CAP = 200;
+export const CANDIDATES_FILENAME = "candidates.jsonl";

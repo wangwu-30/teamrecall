@@ -1,4 +1,9 @@
 import * as path from "node:path";
+import {
+  extractTerms,
+  isProcessStyle,
+  matchCandidate,
+} from "./candidates.js";
 import { MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
 import {
   clampBody,
@@ -10,7 +15,7 @@ import {
 } from "./memory.js";
 import { defaultScope } from "./memory.js";
 import { globMatches } from "./sweep.js";
-import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, MemoryScope, PathsSource, PullRequestContext } from "./types.js";
+import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, MemoryScope, PathsSource, PullRequestContext, ReviewCandidate } from "./types.js";
 
 export interface LearnInput {
   pr_number: string;
@@ -19,6 +24,7 @@ export interface LearnInput {
   review_comments: string[];
   commit_messages: string[];
   existing_memories: Memory[];
+  candidates?: ReviewCandidate[];
 }
 
 export interface DedupResult {
@@ -53,6 +59,7 @@ export interface LearnPlan {
   distiller: DistillerKind;
   distiller_reason?: DistillerReason;
   summary: string;
+  candidates_recorded: number;
 }
 
 const ACTIONS: LearnOutcome["action"][] = [
@@ -61,12 +68,17 @@ const ACTIONS: LearnOutcome["action"][] = [
   "merge",
   "propose_retire",
   "new",
+  "promote",
   "no_op",
 ];
 
 export function generateDistillationPrompt(input: LearnInput): string {
   const existingIndex = input.existing_memories
     .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)} (paths: ${memory.frontmatter.paths.join(", ")}; scope: ${memory.frontmatter.scope ?? "—"})`)
+    .join("\n");
+  const candidateIndex = (input.candidates ?? [])
+    .filter((candidate) => !candidate.promoted_to)
+    .map((candidate) => `- ${candidate.id}: ${candidate.gist} (from ${candidate.pr}; files: ${candidate.files.join(", ") || "—"})`)
     .join("\n");
 
   return `You are reviewing a closed pull request to extract reusable engineering knowledge for the team.
@@ -88,6 +100,11 @@ ${input.diff.slice(0, 3000)}${input.diff.length > 3000 ? "\n...(truncated)" : ""
 
 ## Existing Team Memories
 ${existingIndex || "(none)"}
+
+## Recurrence candidates (not yet memories; never compile these)
+${candidateIndex || "(none)"}
+If this PR repeats the same rule as a candidate, set \`action\` to \`promote\` and \`candidate_id\` to \`C-xxx\` (or \`same_as\`).
+A first-time style/process comment should be \`no_op\` (it will be stored as a candidate). A clearly reusable path-scoped rule may still be \`new\`.
 
 ---
 
@@ -111,9 +128,11 @@ Choose ONE outcome (respond with ONLY the JSON, no other text):
 
 \`\`\`json
 {
-  "action": "reuse|update|merge|propose_retire|new|no_op",
+  "action": "reuse|update|merge|propose_retire|new|promote|no_op",
   "memory_id": "M-xxx (if reuse/update/merge/propose_retire)",
-  "title": "Short title (if new/update)",
+  "candidate_id": "C-xxx (if promote / same as a recurrence candidate)",
+  "same_as": "C-xxx",
+  "title": "Short title (if new/update/promote)",
   "kind": "gotcha|decision|convention|map (if new)",
   "applies_to": ["src/auth/**"],
   "paths": ["alias of applies_to if you prefer"],
@@ -135,7 +154,8 @@ Actions:
 - **merge**: Consolidate overlapping memories
 - **propose_retire**: This PR shows a memory is outdated
 - **new**: Create a new memory (max 3 per PR, only if clearly useful for future PRs)
-- **no_op**: No reusable knowledge (most PRs should be no_op)
+- **promote**: This PR repeats recurrence candidate C-xxx — write a memory with evidence from both PRs
+- **no_op**: No reusable knowledge (most PRs should be no_op; style comments wait for recurrence)
 
 Bias toward no_op. Only create new memories if they would change future decisions.`;
 }
@@ -149,6 +169,7 @@ export function parseDistillationResponse(response: string): LearnOutcome {
       throw new Error("Missing or invalid action/reasoning");
     }
     applyAppliesTo(parsed);
+    hydrateCandidateId(parsed);
     return parsed;
   } catch (error) {
     return {
@@ -182,6 +203,46 @@ export function applyAppliesTo(outcome: LearnOutcome): LearnOutcome {
     outcome.paths = outcome.applies_to;
   }
   for (const child of outcome.memories ?? []) applyAppliesTo(child);
+  return outcome;
+}
+
+export function hydrateCandidateId(outcome: LearnOutcome): LearnOutcome {
+  if (!outcome.candidate_id && outcome.same_as) outcome.candidate_id = outcome.same_as;
+  if (outcome.action === "new" && outcome.candidate_id) outcome.action = "promote";
+  for (const child of outcome.memories ?? []) hydrateCandidateId(child);
+  return outcome;
+}
+
+export function applyCandidateDecision(outcome: LearnOutcome, candidates: ReviewCandidate[]): LearnOutcome {
+  hydrateCandidateId(outcome);
+  if (outcome.candidate_id && candidates.some((candidate) => candidate.id === outcome.candidate_id && !candidate.promoted_to)) {
+    outcome.action = "promote";
+  }
+  for (const child of outcome.memories ?? []) applyCandidateDecision(child, candidates);
+  return outcome;
+}
+
+export function maybePromoteFromCandidates(
+  outcome: LearnOutcome,
+  candidates: ReviewCandidate[],
+  context: PullRequestContext,
+): LearnOutcome {
+  applyCandidateDecision(outcome, candidates);
+  if (outcome.action !== "no_op") return outcome;
+  const files = evidenceFiles(context);
+  for (const comment of context.human_review_comments.length > 0 ? context.human_review_comments : context.review_comments) {
+    const matched = matchCandidate(comment, files, candidates, context.number);
+    if (!matched) continue;
+    const body = clampBody(comment.replace(/\s+/g, " "));
+    return {
+      action: "promote",
+      candidate_id: matched.id,
+      title: firstLine(body),
+      kind: inferKind(body),
+      body,
+      reasoning: `Deterministic recurrence of ${matched.id} from ${matched.pr}`,
+    };
+  }
   return outcome;
 }
 
@@ -234,8 +295,10 @@ export function planLearnOutcomes(
   ttlDays = 90,
   trackedFiles: string[] = [],
   experimentalPaths = false,
+  reviewCandidates: ReviewCandidate[] = [],
 ): LearnPlan {
-  const candidates = (raw.memories && raw.memories.length > 0 ? raw.memories : [raw])
+  const lessons = (raw.memories && raw.memories.length > 0 ? raw.memories : [raw])
+    .map((outcome) => applyCandidateDecision(outcome, reviewCandidates))
     .map((outcome) => forceUpdateIfDuplicate(outcome, existing))
     .slice(0, MAX_LEARN_PER_PR);
 
@@ -249,13 +312,13 @@ export function planLearnOutcomes(
   const usedIds = existing.map((memory) => memory.frontmatter.id);
   let activeCount = existing.filter((memory) => memory.frontmatter.status === "active").length;
 
-  for (const outcome of candidates) {
+  for (const outcome of lessons) {
     if (outcome.action === "no_op" || outcome.action === "reuse") {
       outcomes.push(outcome);
       continue;
     }
 
-    if (outcome.action === "new" && activeCount >= MAX_ACTIVE_MEMORIES) {
+    if ((outcome.action === "new" || outcome.action === "promote") && activeCount >= MAX_ACTIVE_MEMORIES) {
       outcomes.push({
         ...outcome,
         action: "no_op",
@@ -264,7 +327,7 @@ export function planLearnOutcomes(
       continue;
     }
 
-    const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays, trackedFiles, experimentalPaths);
+    const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays, trackedFiles, experimentalPaths, reviewCandidates);
     outcomes.push(planned.outcome);
     mutations.push(...planned.mutations);
     if (planned.scopeNote) scope_notes.push(planned.scopeNote);
@@ -288,6 +351,7 @@ export function planLearnOutcomes(
     scope_notes,
     distiller: "llm",
     summary: buildSummary(learned, updated, retired, context.number),
+    candidates_recorded: 0,
   };
 }
 
@@ -328,6 +392,7 @@ function planOne(
   ttlDays: number,
   trackedFiles: string[],
   experimentalPaths: boolean,
+  reviewCandidates: ReviewCandidate[],
 ): { outcome: LearnOutcome; mutations: FileMutation[]; learned: number; updated: number; retired: number; usedIds: string[]; scopeNote?: string } {
   const created = isoDate();
   const evidence = {
@@ -336,18 +401,35 @@ function planOne(
     commits: context.commits.slice(0, 5),
   };
 
-  if (outcome.action === "new") {
+  if (outcome.action === "new" || outcome.action === "promote") {
+    const matched = outcome.action === "promote"
+      ? reviewCandidates.find((candidate) => candidate.id === outcome.candidate_id && !candidate.promoted_to)
+      : undefined;
+    if (outcome.action === "promote" && !matched) {
+      return {
+        outcome: { ...outcome, action: "no_op", reasoning: `Unknown candidate ${outcome.candidate_id}` },
+        mutations: [],
+        learned: 0,
+        updated: 0,
+        retired: 0,
+        usedIds: [],
+      };
+    }
     const id = generateMemoryId(usedIds);
-    const title = outcome.title || firstLine(outcome.body || "Untitled lesson");
+    const title = outcome.title || firstLine(outcome.body || matched?.gist || "Untitled lesson");
     const body = clampBody(outcome.body || title);
+    const inferFiles = unique([
+      ...(matched?.files ?? []),
+      ...context.files,
+    ]);
     const resolved = experimentalPaths
-      ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
+      ? resolveMemoryPaths(outcome.paths, trackedFiles, unique([...(matched?.files ?? []), ...evidenceFiles(context)]))
       : {
-        paths: outcome.paths?.length ? outcome.paths : inferPathsV02(context.files),
+        paths: outcome.paths?.length ? outcome.paths : inferPathsV02(inferFiles),
         source: (outcome.paths?.length ? "distiller" : "inferred") as PathsSource,
       };
     const paths = resolved.paths;
-    const prs = distinctEvidencePrs(`#${context.number}`);
+    const prs = distinctEvidencePrs(matched?.pr, `#${context.number}`);
     const requested = outcome.scope ?? defaultScope(paths, body);
     const gated = gateAlwaysScope(requested, resolved.source, prs);
     const frontmatter: MemoryFrontmatter = {
@@ -365,7 +447,7 @@ function planOne(
     };
     const filename = memoryFilename(id, title);
     return {
-      outcome: { ...outcome, memory_id: id, title, body },
+      outcome: { ...outcome, memory_id: id, title, body, candidate_id: matched?.id ?? outcome.candidate_id },
       mutations: [{
         path: path.join(projectDir, ".memory", "memories", filename),
         content: formatMemory(frontmatter, body),
@@ -457,11 +539,15 @@ export function buildLearnPrTitle(
   updated: number,
   prNumber: string,
   retired = 0,
+  candidatesRecorded = 0,
 ): string {
   const parts: string[] = [];
   if (learned) parts.push(`learned ${learned}`);
   if (updated) parts.push(`updated ${updated}`);
   if (retired) parts.push(`retired ${retired}`);
+  if (parts.length === 0 && candidatesRecorded > 0) {
+    return `🧠 teamrecall: recorded ${candidatesRecorded} candidate${candidatesRecorded === 1 ? "" : "s"} (from #${prNumber})`;
+  }
   if (parts.length === 0) parts.push("no-op");
   return `🧠 teamrecall: ${parts.join(", ")} (from #${prNumber})`;
 }
@@ -546,6 +632,7 @@ export function fallbackOutcomeFromReviews(context: PullRequestContext): LearnOu
 }
 
 function isDirective(text: string): boolean {
+  if (isProcessStyle(extractTerms(text))) return false;
   return /\b(never|always|must|don't|do not|should only|retries?|convention|don't use)\b/i.test(text)
     && text.trim().length >= 40;
 }
@@ -745,7 +832,7 @@ export function keepSpecificPaths(
 }
 
 function summarizeAction(outcomes: LearnOutcome[]): LearnOutcome["action"] {
-  if (outcomes.some((outcome) => outcome.action === "new")) return "new";
+  if (outcomes.some((outcome) => outcome.action === "new" || outcome.action === "promote")) return "new";
   if (outcomes.some((outcome) => outcome.action === "update" || outcome.action === "merge")) return "update";
   if (outcomes.some((outcome) => outcome.action === "propose_retire")) return "propose_retire";
   if (outcomes.some((outcome) => outcome.action === "reuse")) return "reuse";

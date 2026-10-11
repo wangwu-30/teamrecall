@@ -13,10 +13,17 @@ import {
   startPointForBotBranch,
 } from "./github.js";
 import {
+  loadCandidates,
+  normalizeGist,
+  recordCandidates,
+  writeCandidates,
+} from "./candidates.js";
+import {
   buildLearnPrBody,
   buildLearnPrTitle,
   fallbackOutcomeFromReviews,
   generateDistillationPrompt,
+  maybePromoteFromCandidates,
   parseDistillationResponse,
   planLearnOutcomes,
   type LearnPlan,
@@ -140,6 +147,7 @@ export async function runLearn(input: {
         scope_notes: [],
         distiller: "llm",
         summary: `skipped unmerged #${context.number} (no human review comments)`,
+        candidates_recorded: 0,
       },
       written: [],
       deleted: [],
@@ -163,6 +171,7 @@ export async function runLearn(input: {
         scope_notes: [],
         distiller: "llm",
         summary: `recompiled from #${context.number}`,
+        candidates_recorded: 0,
       },
       written,
       deleted: [],
@@ -172,6 +181,7 @@ export async function runLearn(input: {
 
   const memories = await loadMemories(projectDir);
   const config = await loadConfig(projectDir);
+  const reviewCandidates = await loadCandidates(projectDir);
   const experimentalPaths = Boolean(input.experimentalPaths || config.experimental?.retrieval);
   const prompt = generateDistillationPrompt({
     pr_number: context.number,
@@ -180,6 +190,7 @@ export async function runLearn(input: {
     review_comments: context.review_comments,
     commit_messages: context.commit_messages,
     existing_memories: memories,
+    candidates: reviewCandidates,
   });
 
   let outcome: LearnOutcome;
@@ -209,22 +220,45 @@ export async function runLearn(input: {
   }
 
   const trackedFiles = await listRepoFiles(projectDir);
-  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths);
+  outcome = maybePromoteFromCandidates(outcome, reviewCandidates, context);
+  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths, reviewCandidates);
   plan.distiller = distiller;
   plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);
+
+  const comments = context.human_review_comments.length > 0
+    ? context.human_review_comments
+    : context.review_comments;
+  const nextCandidates = recordCandidates(reviewCandidates, comments, {
+    pr: context.number,
+    url: context.url,
+    files: context.evidence_files.length > 0 ? context.evidence_files : context.files,
+    promoted: plan.outcomes.map((item) => ({
+      candidate_id: item.candidate_id,
+      memory_id: item.memory_id,
+      gist: item.body ? normalizeGist(item.body) : undefined,
+    })),
+  });
+  const before = JSON.stringify(reviewCandidates);
+  const after = JSON.stringify(nextCandidates);
+  if (before !== after) {
+    written.push(await writeCandidates(projectDir, nextCandidates));
+    plan.candidates_recorded = nextCandidates.filter((candidate) => (
+      !reviewCandidates.some((existing) => existing.id === candidate.id)
+    )).length;
+  }
 
   const nextMemories = await loadMemories(projectDir);
   const compiled = await compileMemories(projectDir, nextMemories);
   written.push(...await writeCompiledFiles(projectDir, compiled));
 
   let prUrl: string | null | undefined;
-  if (input.openPr && (plan.mutations.length > 0 || deleted.length > 0)) {
+  if (input.openPr && (plan.mutations.length > 0 || deleted.length > 0 || before !== after)) {
     const opener = input.deps?.openPr ?? openPullRequest;
     prUrl = await opener({
       cwd: projectDir,
       branch: `teamrecall/learn-from-pr-${context.number}`,
-      title: buildLearnPrTitle(plan.learned, plan.updated, context.number, plan.retired),
+      title: buildLearnPrTitle(plan.learned, plan.updated, context.number, plan.retired, plan.candidates_recorded),
       body: buildLearnPrBody(plan, context),
       files: [...MANAGED_GIT_PATHS],
       force: true,

@@ -149,6 +149,20 @@ describe("compileMemories", () => {
     expect(compiled.cursor_rules.get("teamrecall-M-004.mdc")).toContain("alwaysApply: true");
   });
 
+  it("never compiles recurrence candidates into agent files", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({ id: "M-001", body: "Use retries only in the gateway wrapper." }),
+    ]);
+    const blob = [
+      compiled.agents_md,
+      compiled.index_md,
+      ...compiled.claude_rules.values(),
+      ...compiled.cursor_rules.values(),
+    ].join("\n");
+    expect(blob).not.toContain("candidates.jsonl");
+    expect(blob).not.toMatch(/\bC-001\b/);
+  });
+
   it("compiles an unscoped empty-path memory like v0.2 (Claude everywhere, Cursor alwaysApply)", async () => {
     const compiled = await compileMemories("/tmp", [
       memory({
@@ -254,6 +268,18 @@ describe("writeCompiledFiles", () => {
     await expect(fs.access(path.join(dir, ".claude", "rules", "teamrecall", "M-002.md"))).rejects.toThrow();
     await expect(fs.access(path.join(dir, ".cursor", "rules", "teamrecall-M-002.mdc"))).rejects.toThrow();
     expect(await fs.readFile(path.join(dir, ".cursor", "rules", "custom.mdc"), "utf8")).toBe("user rule\n");
+  });
+
+  it("does not rewrite .memory/candidates.jsonl", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-candidates-compile-"));
+    dirs.push(dir);
+    const candidateFile = path.join(dir, ".memory", "candidates.jsonl");
+    await fs.mkdir(path.dirname(candidateFile), { recursive: true });
+    const payload = '{"id":"C-001","gist":"keep review comments short","terms":["keep"],"files":[],"pr":"#10","date":"2026-10-01"}\n';
+    await fs.writeFile(candidateFile, payload, "utf8");
+    await writeCompiledFiles(dir, await compileMemories(dir, [memory({ id: "M-001" })]));
+    expect(await fs.readFile(candidateFile, "utf8")).toBe(payload);
+    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).not.toContain("C-001");
   });
 
   it("keeps 3+ blank lines in user AGENTS.md content across two compiles", async () => {

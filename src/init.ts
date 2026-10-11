@@ -251,6 +251,7 @@ This directory stores team knowledge captured from code review.
 - \`retired/\` — Retired memories
 - Active/abandoned/superseded files stay in \`memories/\` (\`superseded\` needs \`superseded_by\`)
 - \`INDEX.md\` — Compiled index (auto-generated)
+- \`candidates.jsonl\` — Recurrence candidates (not compiled into agent files)
 - \`config.yml\` — Configuration
 
 ## Memory Format

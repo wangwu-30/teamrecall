@@ -1,7 +1,18 @@
 export { backfillProject, collectRuleSources, extractRuleLessons } from "./backfill.js";
 export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
 export {
+  candidatesOverlap,
+  extractTerms,
+  loadCandidates,
+  matchCandidate,
+  normalizeGist,
+  pruneCandidates,
+  recordCandidates,
+} from "./candidates.js";
+export {
   AGENTS_INDEX_MAX_LINES,
+  CANDIDATE_CAP,
+  CANDIDATE_TTL_DAYS,
   CLAUDE_INDEX_IMPORT,
   MAX_ACTIVE_MEMORIES,
   MAX_BODY_WORDS,
@@ -27,8 +38,10 @@ export {
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
+  maybePromoteFromCandidates,
   parseDistillationResponse,
   applyAppliesTo,
+  applyCandidateDecision,
   gateAlwaysScope,
   detectConflicts,
   inferPaths,
@@ -75,5 +88,6 @@ export type {
   MemoryTrigger,
   PathsSource,
   PullRequestContext,
+  ReviewCandidate,
   TeamRecallConfig,
 } from "./types.js";

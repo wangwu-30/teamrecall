@@ -20,10 +20,12 @@ import {
   inferPathsExperimental,
   inferPathsV02,
   keepSpecificPaths,
+  maybePromoteFromCandidates,
   resolveMemoryPaths,
   parseDistillationResponse,
   planLearnOutcomes,
 } from "./learn.js";
+import { loadCandidates, normalizeGist } from "./candidates.js";
 import {
   claudeDistillArgs,
   hasLlmSecret,
@@ -131,6 +133,8 @@ describe("generateDistillationPrompt", () => {
     });
     expect(prompt).toContain("M-001");
     expect(prompt).toContain("no_op");
+    expect(prompt).toContain("promote");
+    expect(prompt).toContain("Recurrence candidates");
     expect(prompt).toContain("applies_to");
     expect(prompt).toContain('"scope": "always|triggered"');
     expect(prompt).toContain("triggers");
@@ -941,6 +945,175 @@ describe("conflict hints", () => {
       paths: ["src/gateway/**"],
       reasoning: "unrelated extra note",
     }, existing)).toEqual([]);
+  });
+});
+
+describe("recurrence promotion", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  });
+
+  const styleComment = "Keep review comments short. Do not paste a whole function into a PR comment.";
+  const styleCommentAgain = "Please keep review comments short — don't paste an entire function into the PR comment.";
+
+  it("parses promote / same_as onto a candidate id", () => {
+    const parsed = parseDistillationResponse(JSON.stringify({
+      action: "new",
+      same_as: "C-001",
+      title: "Short comments",
+      body: styleComment,
+      reasoning: "same rule as the candidate",
+    }));
+    expect(parsed.action).toBe("promote");
+    expect(parsed.candidate_id).toBe("C-001");
+  });
+
+  it("no_ops a keep-comments-short style rule on PR 1 and promotes it on PR 2", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-recurrence-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+
+    const first = await runLearn({
+      projectDir: dir,
+      pr: "10",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context({
+          number: "10",
+          title: "Tweak docs",
+          review_comments: [styleComment],
+          human_review_comments: [styleComment],
+          files: ["README.md"],
+          evidence_files: [],
+        }),
+        distill: async () => JSON.stringify({
+          action: "no_op",
+          reasoning: "First sighting of a style comment; store as a candidate",
+        }),
+      },
+    });
+    expect(first.plan.action).toBe("no_op");
+    expect(first.plan.learned).toBe(0);
+    expect(await fs.readdir(path.join(dir, ".memory", "memories"))).toEqual([]);
+    const stored = await loadCandidates(dir);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.id).toBe("C-001");
+    expect(stored[0]?.gist).toBe(normalizeGist(styleComment));
+    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).not.toContain("C-001");
+    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).not.toContain("Keep review comments short");
+
+    const second = await runLearn({
+      projectDir: dir,
+      pr: "22",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context({
+          number: "22",
+          title: "Another docs tweak",
+          url: "https://github.com/acme/app/pull/22",
+          review_comments: [styleCommentAgain],
+          human_review_comments: [styleCommentAgain],
+          files: ["docs/guide.md"],
+          evidence_files: [],
+        }),
+        distill: async () => JSON.stringify({
+          action: "no_op",
+          reasoning: "Looks like a style nit again",
+        }),
+      },
+    });
+    expect(second.plan.learned).toBe(1);
+    expect(second.plan.outcomes[0]?.action).toBe("promote");
+    expect(second.plan.outcomes[0]?.candidate_id).toBe("C-001");
+    const files = await fs.readdir(path.join(dir, ".memory", "memories"));
+    expect(files.some((file) => file.startsWith("M-001"))).toBe(true);
+    const parsed = parseMemory(await fs.readFile(path.join(dir, ".memory", "memories", files[0]), "utf8"));
+    expect(parsed?.frontmatter.evidence.prs).toEqual(["#10", "#22"]);
+    expect(parsed?.frontmatter.evidence.pr).toBe("#22");
+    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).toContain("M-001");
+    expect((await loadCandidates(dir)).some((item) => item.id === "C-001")).toBe(false);
+  });
+
+  it("promotes when the distiller names the same candidate", () => {
+    const existing = [{
+      id: "C-001",
+      gist: normalizeGist(styleComment),
+      terms: ["keep", "review", "comments", "short", "paste", "function"],
+      files: [],
+      pr: "#10",
+      date: "2026-10-01",
+    }];
+    const outcome = maybePromoteFromCandidates({
+      action: "promote",
+      candidate_id: "C-001",
+      title: "Short comments",
+      body: styleCommentAgain,
+      reasoning: "same as candidate C-001",
+    }, existing, context({ number: "22", human_review_comments: [styleCommentAgain] }));
+    expect(outcome.action).toBe("promote");
+    const planned = planLearnOutcomes(
+      outcome,
+      [],
+      context({ number: "22", human_review_comments: [styleCommentAgain] }),
+      "/tmp/project",
+      90,
+      [],
+      false,
+      existing,
+    );
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.evidence.prs).toEqual(["#10", "#22"]);
+    expect(parsed?.frontmatter.scope).toBe("triggered");
+  });
+
+  it("allows always after promotion because evidence has two PRs", () => {
+    const existing = [{
+      id: "C-001",
+      gist: normalizeGist(styleComment),
+      terms: ["keep", "review", "comments", "short", "paste", "function"],
+      files: [],
+      pr: "#10",
+      date: "2026-10-01",
+    }];
+    const planned = planLearnOutcomes({
+      action: "promote",
+      candidate_id: "C-001",
+      title: "Short comments",
+      body: styleComment,
+      scope: "always",
+      paths: ["**"],
+      reasoning: "recurring process rule",
+    }, [], context({ number: "22" }), "/tmp/project", 90, [], false, existing);
+    expect(parseMemory(planned.mutations[0]?.content ?? "")?.frontmatter.scope).toBe("always");
+  });
+
+  it("still creates a triggered memory on the first PR when the distiller marks it reusable", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-reusable-first-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    const result = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context(),
+        distill: async () => JSON.stringify({
+          action: "new",
+          title: "Gateway retries",
+          kind: "gotcha",
+          paths: ["src/gateway/**"],
+          body: "Register retries only in the gateway wrapper.",
+          reasoning: "Clearly reusable on first sight",
+        }),
+      },
+    });
+    expect(result.plan.learned).toBe(1);
+    expect(result.plan.outcomes[0]?.action).toBe("new");
+    const files = await fs.readdir(path.join(dir, ".memory", "memories"));
+    const parsed = parseMemory(await fs.readFile(path.join(dir, ".memory", "memories", files[0]), "utf8"));
+    expect(parsed?.frontmatter.scope).toBe("triggered");
+    expect(parsed?.frontmatter.evidence.prs).toEqual(["#42"]);
   });
 });
 
