@@ -19,6 +19,7 @@ export interface MemoryFrontmatter {
   triggers?: MemoryTrigger[];
   evidence: {
     pr?: string;
+    prs?: string[];
     review_url?: string;
     commits?: string[];
   };

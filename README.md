@@ -237,7 +237,14 @@ npx -y github:wangwu-30/teamrecall#v0.2.0 doctor
 
 # Learn from a PR (no LLM secret → deterministic distiller)
 npx -y github:wangwu-30/teamrecall#v0.2.0 learn 42
+
+# Experimental: rank memories for a change (opt-in; not used by default compile)
+npx -y github:wangwu-30/teamrecall retrieve -- src/foo.ts
 ```
+
+`teamrecall retrieve` is experimental. Default compile still writes path-scoped rules and the root index the same way as v0.2; retrieve is an extra command, not wired into init/learn/compile.
+
+`teamrecall retrieve` 是实验功能。默认编译仍按 v0.2 写出路径规则和根索引；retrieve 是额外命令，不会接入 init/learn/compile。
 
 ---
 

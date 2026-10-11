@@ -7,7 +7,6 @@ import {
   TEAMRECALL_END,
   TEAMRECALL_START,
 } from "./constants.js";
-import { memoryScope } from "./memory.js";
 import type { CompiledOutput, Memory } from "./types.js";
 import { exists, readText, replaceManagedBlock, writeAtomic } from "./utils/atomic.js";
 
@@ -92,8 +91,8 @@ export function generateCompactIndex(active: Memory[], abandoned: Memory[] = [])
   const reserved = header.length + footer.length + (abandoned.length > 0 ? 3 : 0);
   const items: string[] = [];
   const ordered = [
-    ...active.filter((memory) => memoryScope(memory) === "always"),
-    ...active.filter((memory) => memoryScope(memory) === "triggered"),
+    ...active.filter((memory) => memory.frontmatter.scope === "always"),
+    ...active.filter((memory) => memory.frontmatter.scope !== "always"),
   ];
 
   for (const memory of ordered) {
@@ -127,11 +126,15 @@ export function generateAgentsMdBlock(memories: Memory[]): string {
 }
 
 export function compactLine(memory: Memory): string {
-  if (memoryScope(memory) === "always") {
+  if (memory.frontmatter.scope === "always") {
     const oneLiner = memory.body.replace(/\s+/g, " ").trim();
     return `- **${memory.frontmatter.id}** [always]: ${oneLiner}`;
   }
-  return `- **${memory.frontmatter.id}**: ${extractTitle(memory.body)}`;
+  const title = extractTitle(memory.body);
+  const paths = memory.frontmatter.paths.length > 0
+    ? ` (${memory.frontmatter.paths.slice(0, 2).join(", ")})`
+    : "";
+  return `- **${memory.frontmatter.id}**: ${title}${paths}`;
 }
 
 export function indexIsCapped(block: string): boolean {
@@ -142,9 +145,9 @@ function generateClaudeRules(memories: Memory[]): Map<string, string> {
   const rules = new Map<string, string>();
 
   for (const memory of memories) {
-    const scope = memoryScope(memory);
-    if (scope !== "always" && memory.frontmatter.paths.length === 0) continue;
-    const paths = scope === "always" ? ["**"] : memory.frontmatter.paths;
+    const always = memory.frontmatter.scope === "always";
+    if (!always && memory.frontmatter.paths.length === 0) continue;
+    const paths = always ? ["**"] : memory.frontmatter.paths;
     const frontmatter = ["---", "paths:", ...paths.map((glob) => `  - ${JSON.stringify(glob)}`), "---"].join("\n");
 
     const content = [
@@ -169,9 +172,8 @@ function generateCursorRules(memories: Memory[]): Map<string, string> {
 
   for (const memory of memories) {
     const title = extractTitle(memory.body);
-    const scope = memoryScope(memory);
     const paths = memory.frontmatter.paths;
-    const always = scope === "always";
+    const always = memory.frontmatter.scope === "always";
     if (!always && paths.length === 0) continue;
     const frontmatter = always
       ? [

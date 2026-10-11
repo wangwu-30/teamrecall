@@ -98,6 +98,19 @@ describe("parseDistillationResponse", () => {
     expect(parsed.scope).toBe("triggered");
   });
 
+  it("copies applies_to onto paths for every memories[] entry", () => {
+    const parsed = parseDistillationResponse(JSON.stringify({
+      action: "new",
+      reasoning: "two lessons",
+      memories: [
+        { action: "new", reasoning: "a", applies_to: ["src/auth/**"], title: "Auth", body: "Keep auth cookies httpOnly." },
+        { action: "new", reasoning: "b", applies_to: ["docs/**"], title: "Docs", body: "Mention the change in docs." },
+      ],
+    }));
+    expect(parsed.memories?.[0]?.paths).toEqual(["src/auth/**"]);
+    expect(parsed.memories?.[1]?.paths).toEqual(["docs/**"]);
+  });
+
   it("returns no_op for invalid JSON or unknown action", () => {
     expect(parseDistillationResponse("not json").action).toBe("no_op");
     expect(parseDistillationResponse('{"action":"explode","reasoning":"x"}').action).toBe("no_op");
@@ -258,7 +271,7 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     expect(forced.memory_id).toBe("M-012");
   });
 
-  it("keeps explicit ** as repo-wide always instead of narrowing to evidence", () => {
+  it("keeps explicit ** as repo-wide instead of narrowing to evidence", () => {
     const planned = planLearnOutcomes({
       action: "new",
       title: "Process rule",
@@ -268,8 +281,59 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     }, [], context({ files: ["a/x.ts"], evidence_files: ["a/x.ts"] }), "/tmp/project");
     const parsed = parseMemory(planned.mutations[0]?.content ?? "");
     expect(parsed?.frontmatter.paths).toEqual(["**"]);
-    expect(parsed?.frontmatter.scope).toBe("always");
     expect(parsed?.frontmatter.paths_source).toBe("distiller");
+    expect(parsed?.frontmatter.scope).toBe("triggered");
+    expect(planned.scope_notes.join(" ")).toMatch(/always → triggered/);
+    expect(buildLearnPrBody(planned, context())).toMatch(/always → triggered/);
+  });
+
+  it("allows always only after two distinct PRs or when human-authored", () => {
+    const first = planLearnOutcomes({
+      action: "new",
+      title: "Process rule",
+      body: "Mention the change in every PR.",
+      paths: ["**"],
+      scope: "always",
+      reasoning: "first sighting",
+    }, [], context({ number: "10", files: ["a/x.ts"] }), "/tmp/project");
+    const firstParsed = parseMemory(first.mutations[0]?.content ?? "");
+    expect(firstParsed?.frontmatter.scope).toBe("triggered");
+
+    const existing = [{
+      ...memory("M-001", "Mention the change in every PR.", ["**"]),
+      frontmatter: {
+        ...memory("M-001", "Mention the change in every PR.", ["**"]).frontmatter,
+        scope: "triggered" as const,
+        paths_source: "distiller" as const,
+        evidence: { pr: "#10", prs: ["#10"] },
+      },
+    }];
+    const second = planLearnOutcomes({
+      action: "update",
+      memory_id: "M-001",
+      scope: "always",
+      body: "Mention the change in every PR.",
+      reasoning: "recurred",
+    }, existing, context({ number: "22" }), "/tmp/project");
+    const secondParsed = parseMemory(second.mutations[0]?.content ?? "");
+    expect(secondParsed?.frontmatter.scope).toBe("always");
+    expect(secondParsed?.frontmatter.evidence.prs).toEqual(["#10", "#22"]);
+
+    const human = planLearnOutcomes({
+      action: "update",
+      memory_id: "M-001",
+      scope: "always",
+      body: "Mention the change in every PR.",
+      reasoning: "hand-written",
+    }, [{
+      ...memory("M-001", "Mention the change in every PR.", ["**"]),
+      frontmatter: {
+        ...memory("M-001", "Mention the change in every PR.", ["**"]).frontmatter,
+        paths_source: "human" as const,
+        evidence: { pr: "#10", prs: ["#10"] },
+      },
+    }], context({ number: "10" }), "/tmp/project");
+    expect(parseMemory(human.mutations[0]?.content ?? "")?.frontmatter.scope).toBe("always");
   });
 
   it("keeps extension globs as triggered distiller paths", () => {

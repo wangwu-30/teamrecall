@@ -146,7 +146,7 @@ program
 
 program
   .command("retrieve")
-  .description("Rank memories for changed files (BM25 + path/trigger boost). No LLM.")
+  .description("Experimental: rank memories for changed files (BM25 + path/trigger). Not used by default compile.")
   .argument("[files...]", "Changed file paths")
   .option("-d, --dir <path>", "Project directory", process.cwd())
   .option("--title <title>", "PR or task title")

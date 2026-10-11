@@ -28,6 +28,8 @@ export {
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
   parseDistillationResponse,
+  applyAppliesTo,
+  gateAlwaysScope,
   detectConflicts,
   inferPaths,
   keepSpecificPaths,

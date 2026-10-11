@@ -10,7 +10,7 @@ import {
 } from "./memory.js";
 import { defaultScope } from "./memory.js";
 import { globMatches } from "./sweep.js";
-import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, PathsSource, PullRequestContext } from "./types.js";
+import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, MemoryScope, PathsSource, PullRequestContext } from "./types.js";
 
 export interface LearnInput {
   pr_number: string;
@@ -49,6 +49,7 @@ export interface LearnPlan {
   updated: number;
   retired: number;
   conflicts: PathConflict[];
+  scope_notes: string[];
   distiller: DistillerKind;
   distiller_reason?: DistillerReason;
   summary: string;
@@ -147,9 +148,7 @@ export function parseDistillationResponse(response: string): LearnOutcome {
     if (!ACTIONS.includes(parsed.action) || !parsed.reasoning) {
       throw new Error("Missing or invalid action/reasoning");
     }
-    if ((!parsed.paths || parsed.paths.length === 0) && parsed.applies_to?.length) {
-      parsed.paths = parsed.applies_to;
-    }
+    applyAppliesTo(parsed);
     return parsed;
   } catch (error) {
     return {
@@ -176,6 +175,41 @@ export function checkDuplicate(title: string, paths: string[], existing: Memory[
   }
 
   return { is_duplicate: false, reason: "No duplicate found" };
+}
+
+export function applyAppliesTo(outcome: LearnOutcome): LearnOutcome {
+  if ((!outcome.paths || outcome.paths.length === 0) && outcome.applies_to?.length) {
+    outcome.paths = outcome.applies_to;
+  }
+  for (const child of outcome.memories ?? []) applyAppliesTo(child);
+  return outcome;
+}
+
+export function distinctEvidencePrs(...values: Array<string | string[] | undefined>): string[] {
+  const found: string[] = [];
+  for (const value of values) {
+    if (!value) continue;
+    for (const item of Array.isArray(value) ? value : [value]) {
+      const number = item.replace(/^#/, "").trim();
+      if (number) found.push(`#${number}`);
+    }
+  }
+  return unique(found);
+}
+
+export function allowAlways(pathsSource: PathsSource | undefined, prs: string[]): boolean {
+  if (pathsSource === "human") return true;
+  return prs.length >= 2;
+}
+
+export function gateAlwaysScope(
+  requested: MemoryScope,
+  pathsSource: PathsSource | undefined,
+  prs: string[],
+): { scope: MemoryScope; downgraded: boolean } {
+  if (requested !== "always") return { scope: requested, downgraded: false };
+  if (allowAlways(pathsSource, prs)) return { scope: "always", downgraded: false };
+  return { scope: "triggered", downgraded: true };
 }
 
 export function forceUpdateIfDuplicate(outcome: LearnOutcome, existing: Memory[]): LearnOutcome {
@@ -207,6 +241,7 @@ export function planLearnOutcomes(
   const mutations: FileMutation[] = [];
   const outcomes: LearnOutcome[] = [];
   const conflicts: PathConflict[] = [];
+  const scope_notes: string[] = [];
   let learned = 0;
   let updated = 0;
   let retired = 0;
@@ -231,6 +266,7 @@ export function planLearnOutcomes(
     const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays, trackedFiles);
     outcomes.push(planned.outcome);
     mutations.push(...planned.mutations);
+    if (planned.scopeNote) scope_notes.push(planned.scopeNote);
     learned += planned.learned;
     updated += planned.updated;
     retired += planned.retired;
@@ -248,6 +284,7 @@ export function planLearnOutcomes(
     updated,
     retired,
     conflicts,
+    scope_notes,
     distiller: "llm",
     summary: buildSummary(learned, updated, retired, context.number),
   };
@@ -289,7 +326,7 @@ function planOne(
   usedIds: string[],
   ttlDays: number,
   trackedFiles: string[],
-): { outcome: LearnOutcome; mutations: FileMutation[]; learned: number; updated: number; retired: number; usedIds: string[] } {
+): { outcome: LearnOutcome; mutations: FileMutation[]; learned: number; updated: number; retired: number; usedIds: string[]; scopeNote?: string } {
   const created = isoDate();
   const evidence = {
     pr: `#${context.number}`,
@@ -303,15 +340,17 @@ function planOne(
     const body = clampBody(outcome.body || title);
     const resolved = resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context));
     const paths = resolved.paths;
-    const scope = outcome.scope ?? defaultScope(paths, body);
+    const prs = distinctEvidencePrs(`#${context.number}`);
+    const requested = outcome.scope ?? defaultScope(paths, body);
+    const gated = gateAlwaysScope(requested, resolved.source, prs);
     const frontmatter: MemoryFrontmatter = {
       id,
       kind: (outcome.kind as MemoryKind) || inferKind(body),
       paths,
       paths_source: resolved.source,
-      scope,
+      scope: gated.scope,
       ...(outcome.triggers && outcome.triggers.length > 0 ? { triggers: outcome.triggers } : {}),
-      evidence,
+      evidence: { ...evidence, prs },
       author: context.author || "teamrecall",
       created,
       review_after: reviewAfterDate(created, ttlDays),
@@ -328,6 +367,9 @@ function planOne(
       updated: 0,
       retired: 0,
       usedIds: [id],
+      scopeNote: gated.downgraded
+        ? `${id}: always → triggered (needs evidence from ≥2 distinct PRs unless human-authored; seen ${prs.join(", ")})`
+        : undefined,
     };
   }
 
@@ -365,15 +407,21 @@ function planOne(
   const resolved = outcome.paths && outcome.paths.length > 0
     ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
     : undefined;
+  const paths = resolved?.paths ?? target.frontmatter.paths;
+  const pathsSource = resolved?.source ?? target.frontmatter.paths_source ?? "human";
+  const prs = distinctEvidencePrs(target.frontmatter.evidence.prs, target.frontmatter.evidence.pr, `#${context.number}`);
+  const requested = outcome.scope ?? target.frontmatter.scope ?? defaultScope(paths, target.body);
+  const gated = gateAlwaysScope(requested, pathsSource, prs);
   const nextFrontmatter: MemoryFrontmatter = {
     ...target.frontmatter,
-    paths: resolved?.paths ?? target.frontmatter.paths,
-    paths_source: resolved?.source ?? target.frontmatter.paths_source ?? "human",
-    scope: outcome.scope ?? target.frontmatter.scope,
+    paths,
+    paths_source: pathsSource,
+    scope: gated.scope,
     triggers: outcome.triggers ?? target.frontmatter.triggers,
     evidence: {
       ...target.frontmatter.evidence,
       ...evidence,
+      prs,
       commits: unique([
         ...(target.frontmatter.evidence.commits ?? []),
         ...evidence.commits,
@@ -389,6 +437,9 @@ function planOne(
     updated: 1,
     retired: 0,
     usedIds: [],
+    scopeNote: gated.downgraded
+      ? `${target.frontmatter.id}: always → triggered (needs evidence from ≥2 distinct PRs unless human-authored; seen ${prs.join(", ")})`
+      : undefined,
   };
 }
 
@@ -430,6 +481,7 @@ export function buildLearnPrBody(plan: LearnPlan, context: PullRequestContext): 
     "Only `.memory/` and compiled agent files are touched.",
     "",
     plan.outcomes.map((outcome) => `- **${outcome.action}** ${outcome.memory_id ?? ""}: ${outcome.reasoning}`).join("\n"),
+    ...scopeNotesSection(plan),
     ...deterministicSection(plan),
     ...conflictSections(plan),
   ].join("\n");
@@ -444,6 +496,11 @@ export const LLM_FAILED_DISTILLER_NOTE = [
   "This run used the **deterministic distiller** because the LLM call failed.",
   "The failure is not the same as having no LLM secret set.",
 ].join("\n");
+
+function scopeNotesSection(plan: LearnPlan): string[] {
+  if (plan.scope_notes.length === 0) return [];
+  return ["", "## Scope", "", ...plan.scope_notes.map((note) => `- ${note}`)];
+}
 
 function deterministicSection(plan: LearnPlan): string[] {
   if (plan.distiller !== "deterministic") return [];

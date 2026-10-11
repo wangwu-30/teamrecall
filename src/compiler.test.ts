@@ -85,6 +85,20 @@ describe("compileMemories", () => {
     expect(claudeRule).toContain("# M-001: Retry Logic");
   });
 
+  it("compiles existing unscoped memories like v0.2 path-scoped rules", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({ id: "M-001", paths: ["src/**/*.ts", "lib/**/*.ts"] }),
+    ]);
+    expect(compiled.agents_md).toContain("**M-001**: Use retries only in the gateway wrapper. (src/**/*.ts, lib/**/*.ts)");
+    expect(compiled.agents_md).not.toContain("[always]");
+    const claudeRule = compiled.claude_rules.get("M-001.md");
+    expect(claudeRule).toContain('- "src/**/*.ts"');
+    expect(claudeRule).not.toContain('- "**"');
+    const cursorRule = compiled.cursor_rules.get("teamrecall-M-001.mdc");
+    expect(cursorRule).toContain("globs: src/**/*.ts, lib/**/*.ts");
+    expect(cursorRule).toContain("alwaysApply: false");
+  });
+
   it("generates Cursor rules with comma-separated globs and alwaysApply", async () => {
     const compiled = await compileMemories("/tmp", [
       memory({ id: "M-001", paths: ["src/**/*.ts", "lib/**/*.ts"] }),
