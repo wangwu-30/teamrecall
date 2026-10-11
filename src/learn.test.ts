@@ -15,6 +15,7 @@ import {
   detectConflicts,
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
+  capCommitMessages,
   capPromptContext,
   generateDistillationPrompt,
   inferPaths,
@@ -27,8 +28,9 @@ import {
   parseDistillationResponse,
   planLearnOutcomes,
   selectPromptCandidates,
+  selectPromptMemories,
 } from "./learn.js";
-import { CANDIDATE_PROMPT_FILES, CANDIDATE_PROMPT_K, PROMPT_CONTEXT_CHARS } from "./constants.js";
+import { CANDIDATE_PROMPT_FILES, CANDIDATE_PROMPT_K, PROMPT_COMMITS_CHARS, PROMPT_CONTEXT_CHARS, PROMPT_MEMORY_K } from "./constants.js";
 import { generateCandidateId, loadCandidates, normalizeGist } from "./candidates.js";
 import {
   claudeDistillArgs,
@@ -222,13 +224,29 @@ describe("generateDistillationPrompt", () => {
       expect(capped.comments).toContain(`HEADMARK-${index}`);
     }
 
+    const memories = Array.from({ length: 80 }, (_, index) => memory(
+      `M-${String(index + 1).padStart(3, "0")}`,
+      index === 0
+        ? "Mention the change in every PR description HEADMEM."
+        : `Unrelated memory ${index} about formatter whitespace.`,
+      Array.from({ length: 12 }, (_, part) => `src/pkg${index}/mod${part}/**/*.ts`),
+    ));
+    const commits = Array.from({ length: 30 }, (_, index) => `commit ${index} ${"x".repeat(200)}`);
+    expect(capCommitMessages(commits).length).toBeLessThanOrEqual(PROMPT_COMMITS_CHARS + 16);
+    expect(selectPromptMemories(memories, {
+      review_comments: comments,
+      title: "Tweak a lint",
+      body: prBody,
+      files: ["src/mod0/file0.ts"],
+    })).toHaveLength(PROMPT_MEMORY_K);
+
     const prompt = generateDistillationPrompt({
       pr_number: "99",
       diff: `diff --git a/src/a.ts b/src/a.ts\n${"+x\n".repeat(4000)}`,
       pr_body: prBody,
       review_comments: comments,
-      commit_messages: Array.from({ length: 30 }, (_, index) => `commit ${index} ${"x".repeat(200)}`),
-      existing_memories: [],
+      commit_messages: commits,
+      existing_memories: memories,
       candidates,
       files: ["src/mod0/file0.ts"],
       reviewer_comments: comments.map((body, index) => ({ body, path: `src/mod${index}/file0.ts` })),
@@ -240,7 +258,77 @@ describe("generateDistillationPrompt", () => {
     expect(prompt).toContain("src/mod0/file2.ts");
     expect(prompt).not.toContain("src/mod0/file3.ts");
     expect(prompt).toContain(`+${20 - CANDIDATE_PROMPT_FILES}`);
+    expect(prompt).toContain("HEADMEM");
+    expect(prompt).toContain("M-001");
+    const memorySection = prompt.split("## Existing Team Memories")[1]?.split("## Recurrence")[0] ?? "";
+    expect((memorySection.match(/M-\d+/g) ?? []).length).toBeLessThanOrEqual(PROMPT_MEMORY_K);
+    expect(memorySection).not.toContain("paths:");
     expect(prompt.length).toBeLessThan(40_000);
+  });
+
+  it("shows comment B's rank-13 match when comment A has 60 nearby-path candidates", () => {
+    const nearby = Array.from({ length: 60 }, (_, index) => ({
+      id: `C-a${index.toString(16).padStart(11, "0")}`,
+      gist: `prefer DiagnosticKind in this ruff rule helper ${index}`,
+      terms: ["prefer", "diagnostickind", "ruff", "rule", "helper", `n${index}`],
+      files: [`crates/ruff_linter/src/rules/rule_${index}.rs`],
+      pr: `#${index}`,
+      date: "2026-10-01",
+      reviewer: "bob",
+    }));
+    const decoys = Array.from({ length: 12 }, (_, index) => ({
+      id: `C-d${index.toString(16).padStart(11, "0")}`,
+      gist: "keep review comments short do not paste a whole function",
+      terms: ["keep", "short", "paste", "whole"],
+      files: ["crates/ruff_linter/src/message/mod.rs"],
+      pr: `#1${index}`,
+      date: "2026-10-01",
+      reviewer: "carol",
+    }));
+    const hit = {
+      id: "C-bbbbbbbbbbbb",
+      gist: "keep review comments short do not paste a whole function",
+      terms: ["keep", "short", "paste", "whole"],
+      files: ["crates/ruff_linter/src/message/text.rs"],
+      pr: "#99",
+      date: "2026-10-01",
+      reviewer: "carol",
+    };
+    const shown = selectPromptCandidates([...nearby, ...decoys, hit], {
+      review_comments: [
+        "Prefer DiagnosticKind in this ruff rule helper instead of a raw string.",
+        "Please keep review comments short — don't paste an entire function.",
+      ],
+      reviewer_comments: [
+        { body: "Prefer DiagnosticKind in this ruff rule helper instead of a raw string.", path: "crates/ruff_linter/src/rules/rule_0.rs" },
+        { body: "Please keep review comments short — don't paste an entire function.", path: "crates/ruff_linter/src/message/mod.rs" },
+      ],
+    });
+    expect(shown.length).toBeLessThanOrEqual(CANDIDATE_PROMPT_K);
+    expect(shown.some((candidate) => candidate.id === hit.id)).toBe(true);
+  });
+
+  it("selects 2000 candidates against 50 comments in under 2s", () => {
+    const candidates = Array.from({ length: 2000 }, (_, index) => ({
+      id: `C-${index.toString(16).padStart(12, "0")}`,
+      gist: `nit number ${index} about a changelog entry in the public API`,
+      terms: ["changelog", "entry", "public", `term${index}`],
+      files: [`src/mod${index % 40}/file.ts`],
+      pr: `#${index}`,
+      date: "2026-10-01",
+      reviewer: "bob",
+    }));
+    const reviewer_comments = Array.from({ length: 50 }, (_, index) => ({
+      body: `Please add a changelog entry ${index} for this public API in the wrapper.`,
+      path: `src/mod${index % 40}/file.ts`,
+    }));
+    const started = performance.now();
+    const shown = selectPromptCandidates(candidates, {
+      review_comments: reviewer_comments.map((comment) => comment.body),
+      reviewer_comments,
+    });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(shown.length).toBeLessThanOrEqual(CANDIDATE_PROMPT_K);
   });
 
   it("guarantees a few slots per current comment before filling by global rank", () => {

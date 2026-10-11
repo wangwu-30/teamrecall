@@ -24,7 +24,9 @@ export {
   CLAUDE_INDEX_IMPORT,
   COMPILE_ALWAYS_CAP,
   COMPILE_TRIGGERED_CAP,
+  PROMPT_COMMITS_CHARS,
   PROMPT_CONTEXT_CHARS,
+  PROMPT_MEMORY_K,
   MAX_ACTIVE_MEMORIES,
   MAX_BODY_WORDS,
   STATE_BRANCH,
@@ -49,12 +51,14 @@ export {
   checkDuplicate,
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
+  capCommitMessages,
   capPromptContext,
   formatPromptCandidate,
   generateDistillationPrompt,
   matchingReviewer,
   maybePromoteFromCandidates,
   selectPromptCandidates,
+  selectPromptMemories,
   parseDistillationResponse,
   applyAppliesTo,
   applyCandidateDecision,
@@ -93,7 +97,7 @@ export {
   validateMemoryBody,
   validateSupersededBy,
 } from "./memory.js";
-export { formatRetrieveText, isTrustedPathSource, matchContains, runRetrieve, tokenize, triggerMatches } from "./retrieve.js";
+export { bm25Scores, bm25ScoresFromIndex, buildBm25Index, formatRetrieveText, isTrustedPathSource, matchContains, runRetrieve, tokenize, triggerMatches } from "./retrieve.js";
 export { expandBraces, formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
 export type {
   CompiledOutput,

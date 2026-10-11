@@ -163,35 +163,59 @@ export function distinctiveTerms(memory: Memory): string[] {
   return terms.filter((token) => !GENERIC_PATH_TOKENS.has(token));
 }
 
-export function bm25Scores(queryTokens: string[], documents: string[][]): number[] {
-  const k1 = 1.5;
-  const b = 0.75;
-  const n = documents.length;
-  if (n === 0) return [];
-  const df = new Map<string, number>();
-  const lengths = documents.map((doc) => doc.length);
-  const avgdl = lengths.reduce((sum, len) => sum + len, 0) / n || 1;
-  for (const doc of documents) {
-    const seen = new Set(doc);
-    for (const token of seen) df.set(token, (df.get(token) ?? 0) + 1);
-  }
-  const query = new Map<string, number>();
-  for (const token of new Set(queryTokens)) query.set(token, 1);
+const BM25_K1 = 1.5;
+const BM25_B = 0.75;
 
-  return documents.map((doc, index) => {
+export interface Bm25Index {
+  n: number;
+  avgdl: number;
+  df: Map<string, number>;
+  tfs: Array<Map<string, number>>;
+  lengths: number[];
+  postings: Map<string, number[]>;
+}
+
+export function buildBm25Index(documents: string[][]): Bm25Index {
+  const n = documents.length;
+  const df = new Map<string, number>();
+  const tfs: Array<Map<string, number>> = [];
+  const lengths: number[] = [];
+  const postings = new Map<string, number[]>();
+  for (let index = 0; index < documents.length; index++) {
+    const doc = documents[index] ?? [];
+    lengths.push(doc.length);
     const tf = new Map<string, number>();
     for (const token of doc) tf.set(token, (tf.get(token) ?? 0) + 1);
-    let score = 0;
-    for (const [token, qf] of query) {
-      const freq = tf.get(token) ?? 0;
-      if (freq === 0) continue;
-      const nq = df.get(token) ?? 0;
-      const idf = Math.log(1 + (n - nq + 0.5) / (nq + 0.5));
-      const denom = freq + k1 * (1 - b + b * (lengths[index] / avgdl));
-      score += qf * idf * ((freq * (k1 + 1)) / denom);
+    tfs.push(tf);
+    for (const token of tf.keys()) {
+      df.set(token, (df.get(token) ?? 0) + 1);
+      const posting = postings.get(token);
+      if (posting) posting.push(index);
+      else postings.set(token, [index]);
     }
-    return score;
-  });
+  }
+  const avgdl = (lengths.reduce((sum, len) => sum + len, 0) / (n || 1)) || 1;
+  return { n, avgdl, df, tfs, lengths, postings };
+}
+
+export function bm25ScoresFromIndex(queryTokens: string[], index: Bm25Index): number[] {
+  const scores = new Array<number>(index.n).fill(0);
+  if (index.n === 0) return scores;
+  for (const token of new Set(queryTokens)) {
+    const nq = index.df.get(token) ?? 0;
+    if (nq === 0) continue;
+    const idf = Math.log(1 + (index.n - nq + 0.5) / (nq + 0.5));
+    for (const docIndex of index.postings.get(token) ?? []) {
+      const freq = index.tfs[docIndex]?.get(token) ?? 0;
+      const denom = freq + BM25_K1 * (1 - BM25_B + BM25_B * ((index.lengths[docIndex] ?? 0) / index.avgdl));
+      scores[docIndex] += idf * ((freq * (BM25_K1 + 1)) / denom);
+    }
+  }
+  return scores;
+}
+
+export function bm25Scores(queryTokens: string[], documents: string[][]): number[] {
+  return bm25ScoresFromIndex(queryTokens, buildBm25Index(documents));
 }
 
 function toRetrieved(memory: Memory, score: number, reason: RetrievedMemory["reason"]): RetrievedMemory {
@@ -216,7 +240,7 @@ function scoreMemories(
   input: RetrieveInput,
   alwaysReason: boolean,
 ): RetrievedMemory[] {
-  const raw = bm25Scores(query, memories.map(documentTokens));
+  const raw = bm25ScoresFromIndex(query, buildBm25Index(memories.map(documentTokens)));
   const max = Math.max(0, ...raw);
   const ranked = memories.map((memory, index) => {
     const bm25 = max > 0 ? (raw[index] ?? 0) / max : 0;

@@ -106,6 +106,18 @@ describe("reviewer filters", () => {
     expect(isEligibleReviewerComment({
       body: "```suggestion\nuse Box<T>\n```",
       author: "bob",
+    }, "alice")).toBe(true);
+    expect(isEligibleReviewerComment({
+      body: "```suggestion\n\n```",
+      author: "bob",
+    }, "alice")).toBe(false);
+    expect(isEligibleReviewerComment({
+      body: "```suggestion\n   \n```",
+      author: "bob",
+    }, "alice")).toBe(false);
+    expect(isEligibleReviewerComment({
+      body: "use Box<T>\n```suggestion\nuse Box<T>\n```",
+      author: "bob",
     }, "alice")).toBe(false);
     expect(isEligibleReviewerComment({
       body: "![image](https://github.com/user-attachments/assets/abcd1234.gif)",

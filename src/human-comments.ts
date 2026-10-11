@@ -61,14 +61,55 @@ export function isTinyComment(text: string): boolean {
   return residualLetters(text).length < 4;
 }
 
+export function extractSuggestionBodies(text: string): string[] {
+  const bodies: string[] = [];
+  const patterns = [
+    /```suggestion[^\n]*\n?([\s\S]*?)```/gi,
+    /~~~suggestion[^\n]*\n?([\s\S]*?)~~~/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      bodies.push(match[1] ?? "");
+    }
+  }
+  if (bodies.length === 0) {
+    const unclosed = text.match(/(?:```|~~~)suggestion[^\n]*\n?([\s\S]*)$/i);
+    if (unclosed) bodies.push(unclosed[1] ?? "");
+  }
+  return bodies;
+}
+
+export function hasSuggestionFence(text: string): boolean {
+  return /```suggestion|~~~suggestion/i.test(text);
+}
+
+/** Drop empty, whitespace-only, or no-op (identical to surrounding) suggestions. Keep contentful ones. */
+export function isEmptyOrNoopSuggestion(text: string): boolean {
+  if (!hasSuggestionFence(text)) return false;
+  const suggestions = extractSuggestionBodies(text);
+  if (suggestions.length === 0) return false;
+  const prose = normalizeSuggestionText(stripSuggestionFences(text));
+  return suggestions.every((body) => {
+    const norm = normalizeSuggestionText(body);
+    return !norm || Boolean(prose && norm === prose);
+  });
+}
+
+/** @deprecated Use isEmptyOrNoopSuggestion. Contentful suggestion-only comments are kept. */
 export function isEmptyOrPureSuggestionBlock(text: string): boolean {
-  if (!/```suggestion|~~~suggestion/i.test(text)) return false;
-  const without = text
+  return isEmptyOrNoopSuggestion(text);
+}
+
+function stripSuggestionFences(text: string): string {
+  return text
     .replace(/```suggestion[^\n]*\n?[\s\S]*?```/gi, "")
     .replace(/~~~suggestion[^\n]*\n?[\s\S]*?~~~/gi, "")
     .replace(/```suggestion[\s\S]*$/gi, "")
     .replace(/~~~suggestion[\s\S]*$/gi, "");
-  return without.replace(/[-*_ \t\n`]/g, "").length === 0;
+}
+
+function normalizeSuggestionText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 export function isImageOrGifComment(text: string): boolean {
@@ -123,8 +164,8 @@ export function isLowSignalComment(text: string): boolean {
   if (isClosingOrReopenComment(trimmed)) return true;
   // Noise first — URLs, suggestion fences, and GIFs often contain identifier-like tokens.
   if (isLinkOnlyComment(trimmed)) return true;
-  if (isTinyComment(trimmed)) return true;
-  if (isEmptyOrPureSuggestionBlock(trimmed)) return true;
+  if (isEmptyOrNoopSuggestion(trimmed)) return true;
+  if (!hasSuggestionFence(trimmed) && isTinyComment(trimmed)) return true;
   if (isImageOrGifComment(trimmed)) return true;
   if (hasCodeOrIdentifier(trimmed)) return false;
   if (commentWordCount(trimmed) < 5) return true;
