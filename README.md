@@ -239,7 +239,7 @@ npx -y github:wangwu-30/teamrecall#v0.2.0 doctor
 npx -y github:wangwu-30/teamrecall#v0.2.0 learn 42
 
 # Experimental: rank memories for a change (opt-in; not used by default compile)
-npx -y github:wangwu-30/teamrecall retrieve -- src/foo.ts
+npx -y github:wangwu-30/teamrecall#v0.2.0 retrieve -- src/foo.ts
 ```
 
 `teamrecall retrieve` is experimental. Default compile still writes path-scoped rules and the root index the same way as v0.2; retrieve is an extra command, not wired into init/learn/compile.

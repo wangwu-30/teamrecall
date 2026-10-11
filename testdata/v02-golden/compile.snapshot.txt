@@ -1,0 +1,99 @@
+=== agents.md ===
+## Team Memory
+
+The team has 3 active memories from code review:
+
+- **M-001**: Use retries only in the gateway wrapper. (src/**/*.ts)
+- **M-002**: Mention the change in every PR description. (**/*)
+- **M-003**: Keep review comments short. Do not paste a whole function into a PR comment.
+
+See `.memory/INDEX.md` for full details.
+@.memory/INDEX.md
+=== index.md ===
+# Team Memory Index
+
+Team memories captured from code review. Referenced automatically by Claude Code, Codex, Cursor, and Copilot.
+
+## ⚠️ Gotchas
+
+- **M-001**: Use retries only in the gateway wrapper. — [#42]
+
+## 🎯 Decisions
+
+- **M-003**: Keep review comments short. Do not paste a whole function into a PR comment. — [#9]
+
+## 📏 Conventions
+
+- **M-002**: Mention the change in every PR description. — [#7]
+
+=== claude/M-001.md ===
+---
+paths:
+  - "src/**/*.ts"
+---
+
+# M-001: Use retries only in the gateway wrapper.
+
+Use retries only in the gateway wrapper.
+
+*From #42 by @alice*
+
+=== claude/M-002.md ===
+---
+paths:
+  - "**/*"
+---
+
+# M-002: Mention the change in every PR description.
+
+Mention the change in every PR description.
+
+*From #7 by @bob*
+
+=== claude/M-003.md ===
+---
+---
+
+# M-003: Keep review comments short. Do not paste a whole function into a PR comment.
+
+Keep review comments short. Do not paste a whole function into a PR comment.
+
+*From #9 by @carol*
+
+=== cursor/teamrecall-M-001.mdc ===
+---
+description: "M-001: Use retries only in the gateway wrapper."
+globs: src/**/*.ts
+alwaysApply: false
+---
+
+# M-001: Use retries only in the gateway wrapper.
+
+Use retries only in the gateway wrapper.
+
+*From #42 by @alice*
+
+=== cursor/teamrecall-M-002.mdc ===
+---
+description: "M-002: Mention the change in every PR description."
+globs: **/*
+alwaysApply: false
+---
+
+# M-002: Mention the change in every PR description.
+
+Mention the change in every PR description.
+
+*From #7 by @bob*
+
+=== cursor/teamrecall-M-003.mdc ===
+---
+description: "M-003: Keep review comments short. Do not paste a whole function into a PR comment."
+alwaysApply: true
+---
+
+# M-003: Keep review comments short. Do not paste a whole function into a PR comment.
+
+Keep review comments short. Do not paste a whole function into a PR comment.
+
+*From #9 by @carol*

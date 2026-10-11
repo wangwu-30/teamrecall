@@ -149,18 +149,34 @@ describe("compileMemories", () => {
     expect(compiled.cursor_rules.get("teamrecall-M-004.mdc")).toContain("alwaysApply: true");
   });
 
-  it("does not compile triggered memories with empty paths into always-loaded rule files", async () => {
+  it("compiles an unscoped empty-path memory like v0.2 (Claude everywhere, Cursor alwaysApply)", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-003",
+        paths: [],
+        body: "Keep review comments short. Do not paste a whole function into a PR comment.",
+      }),
+    ]);
+    expect(compiled.agents_md).toContain("**M-003**: Keep review comments short.");
+    expect(compiled.agents_md).not.toContain("[always]");
+    expect(compiled.claude_rules.get("M-003.md")?.startsWith("---\n---\n")).toBe(true);
+    expect(compiled.claude_rules.get("M-003.md")).not.toContain("paths:");
+    expect(compiled.cursor_rules.get("teamrecall-M-003.mdc")).toContain("alwaysApply: true");
+    expect(compiled.cursor_rules.get("teamrecall-M-003.mdc")).not.toContain("globs:");
+  });
+
+  it("still writes rule files for triggered memories with empty paths", async () => {
     const compiled = await compileMemories("/tmp", [
       memory({
         id: "M-003",
         scope: "triggered",
         paths: [],
-        body: "No evidence, so this stays an index title only.",
+        body: "No evidence, so this still compiles like v0.2 empty paths.",
       }),
     ]);
-    expect(compiled.agents_md).toContain("**M-003**: No evidence, so this stays an index title only.");
-    expect(compiled.claude_rules.has("M-003.md")).toBe(false);
-    expect(compiled.cursor_rules.has("teamrecall-M-003.mdc")).toBe(false);
+    expect(compiled.agents_md).toContain("**M-003**: No evidence, so this still compiles like v0.2 empty paths.");
+    expect(compiled.claude_rules.get("M-003.md")?.startsWith("---\n---\n")).toBe(true);
+    expect(compiled.cursor_rules.get("teamrecall-M-003.mdc")).toContain("alwaysApply: true");
   });
 
   it("keeps the AGENTS.md index at or under 40 lines", async () => {

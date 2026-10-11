@@ -5,7 +5,6 @@ import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { fallbackOutcomeFromReviews, planLearnOutcomes } from "./learn.js";
 import {
   clampBody,
-  defaultScope,
   formatMemory,
   generateMemoryId,
   isoDate,
@@ -74,7 +73,7 @@ function ruleLesson(text: string, source: string): LearnOutcome {
     action: "new",
     title: body.split(/[.!?]/)[0] || slugify(body),
     kind: "convention",
-    paths: [],
+    paths: ["**/*"],
     body,
     reasoning: `Backfilled from ${source}`,
   };
@@ -164,9 +163,9 @@ async function writeNewMemory(
   const frontmatter: MemoryFrontmatter = {
     id,
     kind: lesson.kind ?? "convention",
-    paths: lesson.paths ?? [],
+    paths: lesson.paths ?? ["**/*"],
     paths_source: "human",
-    scope: lesson.scope ?? defaultScope(lesson.paths ?? [], lesson.body ?? ""),
+    ...(lesson.scope ? { scope: lesson.scope } : {}),
     evidence: { pr: context.number === "backfill" ? undefined : `#${context.number}` },
     author: context.author,
     created,

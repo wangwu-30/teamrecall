@@ -233,6 +233,7 @@ export function planLearnOutcomes(
   projectDir: string,
   ttlDays = 90,
   trackedFiles: string[] = [],
+  experimentalPaths = false,
 ): LearnPlan {
   const candidates = (raw.memories && raw.memories.length > 0 ? raw.memories : [raw])
     .map((outcome) => forceUpdateIfDuplicate(outcome, existing))
@@ -263,7 +264,7 @@ export function planLearnOutcomes(
       continue;
     }
 
-    const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays, trackedFiles);
+    const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays, trackedFiles, experimentalPaths);
     outcomes.push(planned.outcome);
     mutations.push(...planned.mutations);
     if (planned.scopeNote) scope_notes.push(planned.scopeNote);
@@ -326,6 +327,7 @@ function planOne(
   usedIds: string[],
   ttlDays: number,
   trackedFiles: string[],
+  experimentalPaths: boolean,
 ): { outcome: LearnOutcome; mutations: FileMutation[]; learned: number; updated: number; retired: number; usedIds: string[]; scopeNote?: string } {
   const created = isoDate();
   const evidence = {
@@ -338,7 +340,12 @@ function planOne(
     const id = generateMemoryId(usedIds);
     const title = outcome.title || firstLine(outcome.body || "Untitled lesson");
     const body = clampBody(outcome.body || title);
-    const resolved = resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context));
+    const resolved = experimentalPaths
+      ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
+      : {
+        paths: outcome.paths?.length ? outcome.paths : inferPathsV02(context.files),
+        source: (outcome.paths?.length ? "distiller" : "inferred") as PathsSource,
+      };
     const paths = resolved.paths;
     const prs = distinctEvidencePrs(`#${context.number}`);
     const requested = outcome.scope ?? defaultScope(paths, body);
@@ -405,7 +412,9 @@ function planOne(
   }
 
   const resolved = outcome.paths && outcome.paths.length > 0
-    ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
+    ? (experimentalPaths
+      ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
+      : { paths: outcome.paths, source: "distiller" as PathsSource })
     : undefined;
   const paths = resolved?.paths ?? target.frontmatter.paths;
   const pathsSource = resolved?.source ?? target.frontmatter.paths_source ?? "human";
@@ -647,7 +656,22 @@ function mergeGroups(groups: PathGroup[], max: number): PathGroup[] {
   return next;
 }
 
-export function inferPaths(files: string[]): string[] {
+/** v0.2 default: top-level directory globs, or repo-wide if only root/dot files. */
+export function inferPathsV02(files: string[]): string[] {
+  const dirs = files
+    .map((file) => file.split("/")[0])
+    .filter((part) => part && !part.startsWith("."));
+  const uniqueDirs = unique(dirs).slice(0, 2);
+  if (uniqueDirs.length === 0) return ["**/*"];
+  return uniqueDirs.map((dir) => `${dir}/**/*`);
+}
+
+export function inferPaths(files: string[], experimental = false): string[] {
+  return experimental ? inferPathsExperimental(files) : inferPathsV02(files);
+}
+
+/** Narrower inference used when experimental.retrieval / --experimental-paths is on. */
+export function inferPathsExperimental(files: string[]): string[] {
   const normalized = unique(files.map((item) => item.replaceAll("\\", "/")).filter(Boolean));
   if (normalized.length === 0) return [];
 
@@ -694,7 +718,7 @@ export function resolveMemoryPaths(
   evidence: string[],
 ): { paths: string[]; source: PathsSource } {
   const candidates = unique((proposed ?? []).map((glob) => glob.replaceAll("\\", "/")));
-  if (candidates.length === 0) return { paths: inferPaths(evidence), source: "inferred" };
+  if (candidates.length === 0) return { paths: inferPathsExperimental(evidence), source: "inferred" };
   const universe = unique([...tracked, ...evidence]);
   const specific: string[] = [];
   let sawRepoWide = false;
@@ -709,7 +733,7 @@ export function resolveMemoryPaths(
   }
   if (specific.length > 0) return { paths: specific, source: "distiller" };
   if (sawRepoWide) return { paths: ["**"], source: "distiller" };
-  return { paths: inferPaths(evidence), source: "inferred" };
+  return { paths: inferPathsExperimental(evidence), source: "inferred" };
 }
 
 export function keepSpecificPaths(

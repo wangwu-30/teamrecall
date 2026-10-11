@@ -1,0 +1,42 @@
+=== agents.md ===
+## Team Memory
+
+The team has 1 active memories from code review:
+
+- **M-001**: Gateway retries. Never retry in the service layer; register retries only in the  (**/*)
+
+See `.memory/INDEX.md` for full details.
+@.memory/INDEX.md
+=== index.md ===
+# Team Memory Index
+
+Team memories captured from code review. Referenced automatically by Claude Code, Codex, Cursor, and Copilot.
+
+## 📏 Conventions
+
+- **M-001**: Gateway retries. Never retry in the service layer; register retries only in the
+
+=== claude/M-001.md ===
+---
+paths:
+  - "**/*"
+---
+
+# M-001: Gateway retries. Never retry in the service layer; register retries only in the 
+
+Gateway retries. Never retry in the service layer; register retries only in the gateway wrapper so callers see one policy.
+
+*From code review by @teamrecall*
+
+=== cursor/teamrecall-M-001.mdc ===
+---
+description: "M-001: Gateway retries. Never retry in the service layer; register retries only in the "
+globs: **/*
+alwaysApply: false
+---
+
+# M-001: Gateway retries. Never retry in the service layer; register retries only in the 
+
+Gateway retries. Never retry in the service layer; register retries only in the gateway wrapper so callers see one policy.
+
+*From code review by @teamrecall*

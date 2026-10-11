@@ -122,6 +122,7 @@ program
   .option("-d, --dir <path>", "Project directory", process.cwd())
   .option("--ci", "CI mode: compile and open a bot PR when there are changes")
   .option("--pr", "Open a bot PR (local learn defaults to no PR)")
+  .option("--experimental-paths", "Use v0.3 path inference (or set experimental.retrieval in config.yml)")
   .action(async (pr, options) => {
     try {
       const projectDir = path.resolve(options.dir);
@@ -131,6 +132,7 @@ program
         pr: String(pr),
         openPr: shouldOpenLearnPr({ ci: Boolean(options.ci), pr: Boolean(options.pr) }),
         ci: Boolean(options.ci),
+        experimentalPaths: Boolean(options.experimentalPaths),
       });
 
       console.log(`Outcome: ${result.plan.summary}`);

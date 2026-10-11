@@ -145,10 +145,13 @@ function generateClaudeRules(memories: Memory[]): Map<string, string> {
   const rules = new Map<string, string>();
 
   for (const memory of memories) {
-    const always = memory.frontmatter.scope === "always";
-    if (!always && memory.frontmatter.paths.length === 0) continue;
-    const paths = always ? ["**"] : memory.frontmatter.paths;
-    const frontmatter = ["---", "paths:", ...paths.map((glob) => `  - ${JSON.stringify(glob)}`), "---"].join("\n");
+    const explicitAlways = memory.frontmatter.scope === "always";
+    const paths = memory.frontmatter.paths;
+    const frontmatter = explicitAlways
+      ? ["---", "paths:", '  - "**"', "---"].join("\n")
+      : paths.length > 0
+        ? ["---", "paths:", ...paths.map((glob) => `  - ${JSON.stringify(glob)}`), "---"].join("\n")
+        : "---\n---";
 
     const content = [
       frontmatter,
@@ -173,8 +176,7 @@ function generateCursorRules(memories: Memory[]): Map<string, string> {
   for (const memory of memories) {
     const title = extractTitle(memory.body);
     const paths = memory.frontmatter.paths;
-    const always = memory.frontmatter.scope === "always";
-    if (!always && paths.length === 0) continue;
+    const always = memory.frontmatter.scope === "always" || paths.length === 0;
     const frontmatter = always
       ? [
           "---",

@@ -32,6 +32,8 @@ export {
   gateAlwaysScope,
   detectConflicts,
   inferPaths,
+  inferPathsExperimental,
+  inferPathsV02,
   keepSpecificPaths,
   resolveMemoryPaths,
   pathsOverlap,

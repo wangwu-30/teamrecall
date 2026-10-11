@@ -41,6 +41,9 @@ export interface TeamRecallConfig {
   review_ttl_days: number;
   distillation_model?: string;
   retrieve_always_cap?: number;
+  experimental?: {
+    retrieval?: boolean;
+  };
 }
 
 export interface LearnOutcome {

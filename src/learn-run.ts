@@ -114,6 +114,7 @@ export async function runLearn(input: {
   pr: string;
   openPr?: boolean;
   ci?: boolean;
+  experimentalPaths?: boolean;
   deps?: LearnRunDeps;
 }): Promise<LearnRunResult> {
   const projectDir = path.resolve(input.projectDir);
@@ -171,6 +172,7 @@ export async function runLearn(input: {
 
   const memories = await loadMemories(projectDir);
   const config = await loadConfig(projectDir);
+  const experimentalPaths = Boolean(input.experimentalPaths || config.experimental?.retrieval);
   const prompt = generateDistillationPrompt({
     pr_number: context.number,
     diff: context.diff,
@@ -207,7 +209,7 @@ export async function runLearn(input: {
   }
 
   const trackedFiles = await listRepoFiles(projectDir);
-  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles);
+  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths);
   plan.distiller = distiller;
   plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);
