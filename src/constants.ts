@@ -15,3 +15,4 @@ export const STATE_BRANCH = "teamrecall/state";
 export const GIST_MAX_CHARS = 120;
 export const COMPILE_TRIGGERED_CAP = 10;
 export const COMPILE_ALWAYS_CAP = 8;
+export const CANDIDATE_PROMPT_K = 20;

@@ -201,7 +201,7 @@ describe("compileMemories", () => {
     expect(block.split("\n").length).toBeLessThanOrEqual(AGENTS_INDEX_MAX_LINES);
   });
 
-  it("injects at most 10 triggered memories plus always-scope ones", async () => {
+  it("writes a per-memory rule file for every active memory; retrieve applies the query cap", async () => {
     const memories = [
       ...Array.from({ length: 3 }, (_, index) => memory({
         id: `M-00${index + 1}`,
@@ -211,16 +211,39 @@ describe("compileMemories", () => {
       ...Array.from({ length: 15 }, (_, index) => memory({
         id: `M-${String(index + 10).padStart(3, "0")}`,
         scope: "triggered",
-        body: `Triggered rule ${index + 1}`,
+        paths: [`src/mod${index}/**`],
+        body: `Triggered rule ${index + 1} for this package directory.`,
       })),
     ];
     const compiled = await compileMemories("/tmp", memories);
-    expect(compiled.claude_rules.size).toBe(13);
-    expect(compiled.cursor_rules.size).toBe(13);
-    expect(compiled.agents_md).toContain("M-001");
-    expect(compiled.agents_md).toContain("M-010");
-    expect(compiled.agents_md).not.toContain("M-020");
+    expect(compiled.claude_rules.size).toBe(18);
+    expect(compiled.cursor_rules.size).toBe(18);
+    expect(compiled.claude_rules.has("M-020.md")).toBe(true);
     expect(compiled.index_md).toContain("M-020");
+  });
+
+  it("ranks the compact index by recency then evidence, not catalog id order", async () => {
+    const memories = [
+      memory({
+        id: "M-001",
+        scope: "triggered",
+        created: "2026-01-01",
+        evidence: { pr: "#1", prs: ["#1"] },
+        body: "Old first catalog rule about retries in the gateway wrapper.",
+      }),
+      memory({
+        id: "M-020",
+        scope: "triggered",
+        created: "2026-10-11",
+        evidence: { pr: "#20", prs: ["#10", "#20", "#30"] },
+        body: "Newest well-evidenced rule about auth cookies staying httpOnly.",
+      }),
+    ];
+    const compiled = await compileMemories("/tmp", memories);
+    const firstTriggered = compiled.agents_md.indexOf("M-020");
+    const later = compiled.agents_md.indexOf("M-001");
+    expect(firstTriggered).toBeGreaterThan(-1);
+    expect(later).toBeGreaterThan(firstTriggered);
   });
 });
 

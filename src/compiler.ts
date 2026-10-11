@@ -3,8 +3,6 @@ import * as path from "node:path";
 import {
   AGENTS_INDEX_MAX_LINES,
   CLAUDE_INDEX_IMPORT,
-  COMPILE_ALWAYS_CAP,
-  COMPILE_TRIGGERED_CAP,
   MAX_ACTIVE_MEMORIES,
   TEAMRECALL_END,
   TEAMRECALL_START,
@@ -22,24 +20,41 @@ export async function compileMemories(
     .filter((memory) => memory.frontmatter.status === "active")
     .slice(0, MAX_ACTIVE_MEMORIES);
   const abandonedMemories = memories.filter((memory) => memory.frontmatter.status === "abandoned");
-  const injected = selectInjectedMemories(catalog);
-  const compact = generateCompactIndex(injected, abandonedMemories);
+  const ranked = rankMemoriesForIndex(catalog);
+  const compact = generateCompactIndex(ranked, abandonedMemories);
 
   return {
     agents_md: compact,
     index_md: generateIndexMd(catalog, abandonedMemories),
     compact_index: compact,
-    claude_rules: generateClaudeRules(injected),
-    cursor_rules: generateCursorRules(injected),
+    claude_rules: generateClaudeRules(catalog),
+    cursor_rules: generateCursorRules(catalog),
   };
 }
 
+export function evidenceCount(memory: Memory): number {
+  return memory.frontmatter.evidence.prs?.length
+    ?? (memory.frontmatter.evidence.pr ? 1 : 0);
+}
+
+/** Static compile ranking: recency, then evidence count. Retrieve applies the per-query cap. */
+export function rankMemoriesForIndex(active: Memory[]): Memory[] {
+  const byRank = (left: Memory, right: Memory): number => {
+    const created = (right.frontmatter.created ?? "").localeCompare(left.frontmatter.created ?? "");
+    if (created !== 0) return created;
+    const evidence = evidenceCount(right) - evidenceCount(left);
+    if (evidence !== 0) return evidence;
+    return left.frontmatter.id.localeCompare(right.frontmatter.id);
+  };
+  return [
+    ...active.filter((memory) => memory.frontmatter.scope === "always").sort(byRank),
+    ...active.filter((memory) => memory.frontmatter.scope !== "always").sort(byRank),
+  ];
+}
+
+/** @deprecated Use rankMemoriesForIndex. Compile no longer globally caps to the first 10 ids. */
 export function selectInjectedMemories(active: Memory[]): Memory[] {
-  const always = active.filter((memory) => memory.frontmatter.scope === "always").slice(0, COMPILE_ALWAYS_CAP);
-  const triggered = active
-    .filter((memory) => memory.frontmatter.scope !== "always")
-    .slice(0, COMPILE_TRIGGERED_CAP);
-  return [...always, ...triggered];
+  return rankMemoriesForIndex(active);
 }
 
 function generateIndexMd(active: Memory[], abandoned: Memory[]): string {
@@ -131,7 +146,7 @@ export function generateCompactIndex(active: Memory[], abandoned: Memory[] = [])
 }
 
 export function generateAgentsMdBlock(memories: Memory[]): string {
-  const active = selectInjectedMemories(memories.filter((memory) => memory.frontmatter.status === "active"));
+  const active = rankMemoriesForIndex(memories.filter((memory) => memory.frontmatter.status === "active"));
   const abandoned = memories.filter((memory) => memory.frontmatter.status === "abandoned");
   return generateCompactIndex(active, abandoned);
 }

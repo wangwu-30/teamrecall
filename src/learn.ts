@@ -1,10 +1,13 @@
 import * as path from "node:path";
 import {
+  extractTerms,
   isPromotableQuality,
   matchCandidate,
+  normalizeGist,
   toImperativeBody,
 } from "./candidates.js";
-import { MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
+import { CANDIDATE_PROMPT_K, MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
+import { bm25Scores, tokenize } from "./retrieve.js";
 import {
   clampBody,
   formatMemory,
@@ -25,6 +28,8 @@ export interface LearnInput {
   commit_messages: string[];
   existing_memories: Memory[];
   candidates?: ReviewCandidate[];
+  files?: string[];
+  title?: string;
 }
 
 export interface DedupResult {
@@ -72,12 +77,38 @@ const ACTIONS: LearnOutcome["action"][] = [
   "no_op",
 ];
 
+export function selectPromptCandidates(
+  candidates: ReviewCandidate[],
+  input: { review_comments: string[]; files?: string[]; title?: string; body?: string },
+  k = CANDIDATE_PROMPT_K,
+): ReviewCandidate[] {
+  const open = candidates.filter((candidate) => !candidate.promoted_to);
+  if (open.length <= k) return open;
+  const query = tokenize([
+    ...(input.files ?? []),
+    input.title ?? "",
+    input.body ?? "",
+    ...input.review_comments,
+  ].join(" "));
+  const docs = open.map((candidate) => tokenize(`${candidate.gist} ${candidate.terms.join(" ")} ${candidate.files.join(" ")}`));
+  const scores = bm25Scores(query, docs);
+  return open
+    .map((candidate, index) => ({ candidate, score: scores[index] ?? 0 }))
+    .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
+    .slice(0, k)
+    .map((item) => item.candidate);
+}
+
 export function generateDistillationPrompt(input: LearnInput): string {
   const existingIndex = input.existing_memories
     .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)} (paths: ${memory.frontmatter.paths.join(", ")}; scope: ${memory.frontmatter.scope ?? "—"})`)
     .join("\n");
-  const candidateIndex = (input.candidates ?? [])
-    .filter((candidate) => !candidate.promoted_to)
+  const candidateIndex = selectPromptCandidates(input.candidates ?? [], {
+    review_comments: input.review_comments,
+    files: input.files,
+    title: input.title,
+    body: input.pr_body,
+  })
     .map((candidate) => `- ${candidate.id}: ${candidate.gist} (from ${candidate.pr}; files: ${candidate.files.join(", ") || "—"})`)
     .join("\n");
 
@@ -424,17 +455,6 @@ function planOne(
         usedIds: [],
       };
     }
-    const qualityText = outcome.body || matched?.gist || "";
-    if (outcome.action === "promote" && !isPromotableQuality(qualityText) && !isPromotableQuality(matched?.gist ?? "")) {
-      return {
-        outcome: { ...outcome, action: "no_op", reasoning: "Candidate failed the imperative quality gate" },
-        mutations: [],
-        learned: 0,
-        updated: 0,
-        retired: 0,
-        usedIds: [],
-      };
-    }
     if (matched?.promoted_to) {
       const target = existing.find((memory) => memory.frontmatter.id === matched.promoted_to);
       if (target) {
@@ -444,7 +464,7 @@ function planOne(
         });
       }
     }
-    const reviewer = currentReviewer(context, matched);
+    const reviewer = matchingReviewer(context, matched, outcome.body);
     const id = generateMemoryId(usedIds);
     const title = outcome.title || firstLine(outcome.body || matched?.gist || "Untitled lesson");
     const body = clampBody(toImperativeBody(outcome.body || title) || title);
@@ -527,11 +547,31 @@ function planOne(
   return planUpdate(outcome, target, context, created, evidence, ttlDays, trackedFiles, experimentalPaths);
 }
 
-function currentReviewer(context: PullRequestContext, matched?: ReviewCandidate): string {
-  return context.reviewer_comments[0]?.author
-    || matched?.reviewer
+export function matchingReviewer(
+  context: PullRequestContext,
+  matched?: ReviewCandidate,
+  body?: string,
+): string {
+  const comments = context.reviewer_comments ?? [];
+  const needle = body || matched?.gist || "";
+  if (needle) {
+    const gist = normalizeGist(needle);
+    const terms = extractTerms(needle);
+    const hit = comments.find((comment) => normalizeGist(comment.body) === gist)
+      || comments.find((comment) => {
+        const shared = extractTerms(comment.body).filter((term) => terms.includes(term));
+        return shared.length >= 3;
+      });
+    if (hit) return hit.author;
+  }
+  return matched?.reviewer
+    || comments[0]?.author
     || context.author
     || "teamrecall";
+}
+
+function currentReviewer(context: PullRequestContext, matched?: ReviewCandidate): string {
+  return matchingReviewer(context, matched);
 }
 
 function planUpdate(
@@ -556,7 +596,7 @@ function planUpdate(
   const reviewers = unique([
     ...(target.frontmatter.evidence.reviewers ?? []),
     extra?.extraReviewer,
-    currentReviewer(context),
+    matchingReviewer(context, undefined, outcome.body),
   ]);
   const requested = outcome.scope ?? target.frontmatter.scope ?? defaultScope(paths, target.body);
   const gated = gateAlwaysScope(requested, pathsSource, prs, reviewers);
@@ -641,13 +681,14 @@ export function buildLearnPrBody(plan: LearnPlan, context: PullRequestContext): 
 }
 
 export const DETERMINISTIC_DISTILLER_NOTE = [
-  "This run used the **deterministic distiller** because neither `CLAUDE_CODE_OAUTH_TOKEN` nor `OPENAI_API_KEY` was set.",
-  "Day-one learn works with zero secrets. Set `CLAUDE_CODE_OAUTH_TOKEN` after `claude setup-token` to enable LLM distillation.",
+  "This run used the **deterministic recorder** because neither `CLAUDE_CODE_OAUTH_TOKEN` nor `OPENAI_API_KEY` was set.",
+  "Zero-secret mode only records recurrence candidates and compiles existing hand-written memories.",
+  "Recurrence promotion needs an LLM engine (`claude` / `codex` CLI, or `CLAUDE_CODE_OAUTH_TOKEN` / `OPENAI_API_KEY`).",
 ].join("\n");
 
 export const LLM_FAILED_DISTILLER_NOTE = [
-  "This run used the **deterministic distiller** because the LLM call failed.",
-  "The failure is not the same as having no LLM secret set.",
+  "This run used the **deterministic recorder** because the LLM call failed.",
+  "Candidates were recorded; no memory was auto-written. The failure is not the same as having no LLM secret set.",
 ].join("\n");
 
 function scopeNotesSection(plan: LearnPlan): string[] {
@@ -675,26 +716,13 @@ function conflictSections(plan: LearnPlan): string[] {
 }
 
 export function fallbackOutcomeFromReviews(context: PullRequestContext): LearnOutcome {
-  const reviewerBodies = (context.reviewer_comments ?? []).map((comment) => comment.body);
-  const comments = reviewerBodies.length > 0 ? reviewerBodies : context.review_comments;
-  const directive = comments.find((comment) => isDirective(comment) && isPromotableQuality(comment));
-  if (!directive) {
-    return { action: "no_op", reasoning: "No reusable directive in review comments" };
+  if ((context.reviewer_comments ?? []).length === 0) {
+    return { action: "no_op", reasoning: "No eligible reviewer comments" };
   }
-  const body = clampBody(toImperativeBody(directive) || directive.replace(/\s+/g, " "));
   return {
-    action: "new",
-    title: firstLine(body),
-    kind: inferKind(body),
-    body,
-    reasoning: "Deterministic fallback from a review directive",
+    action: "no_op",
+    reasoning: "Zero-secret mode records candidates only; recurrence promotion needs an LLM engine",
   };
-}
-
-function isDirective(text: string): boolean {
-  if (/\b(review comments?|pr comments?|paste .{0,20}function)\b/i.test(text)) return false;
-  return /\b(never|always|must|don't|do not|should only|retries?|convention|don't use)\b/i.test(text)
-    && text.trim().length >= 40;
 }
 
 function inferKind(body: string): MemoryKind {

@@ -1,5 +1,5 @@
 export { backfillProject, collectRuleSources, extractRuleLessons } from "./backfill.js";
-export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
+export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, listStaleGeneratedRules, rankMemoriesForIndex, writeCompiledFiles } from "./compiler.js";
 export {
   candidatesOverlap,
   extractTerms,
@@ -7,14 +7,17 @@ export {
   isPromotableQuality,
   loadCandidates,
   matchCandidate,
+  mergeCandidateLists,
   normalizeGist,
   pruneCandidates,
   recordCandidates,
+  stripHtml,
   toImperativeBody,
 } from "./candidates.js";
 export {
   AGENTS_INDEX_MAX_LINES,
   CANDIDATE_CAP,
+  CANDIDATE_PROMPT_K,
   CANDIDATE_TTL_DAYS,
   CLAUDE_INDEX_IMPORT,
   COMPILE_ALWAYS_CAP,
@@ -44,7 +47,9 @@ export {
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
+  matchingReviewer,
   maybePromoteFromCandidates,
+  selectPromptCandidates,
   parseDistillationResponse,
   applyAppliesTo,
   applyCandidateDecision,
@@ -67,7 +72,7 @@ export {
   shouldOpenLearnPr,
 } from "./learn-run.js";
 export { humanCommentBodies, isBotAuthor, isEligibleReviewerComment, reviewerComments, shouldLearnFromClosedPr } from "./human-comments.js";
-export { AUTHORED_COMMENT_JQ, GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, authoredCommentApiArgs, createOrReusePullRequest, evidenceFilesFromComments, getDefaultBranch, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
+export { AUTHORED_COMMENT_JQ, GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, authoredCommentApiArgs, createOrReusePullRequest, evidenceFilesFromComments, getDefaultBranch, gitIdentityArgs, gitPushArgs, isCandidateStatePath, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
 export {
   clampBody,
   countWords,
@@ -93,6 +98,7 @@ export type {
   MemoryScope,
   MemoryTrigger,
   PathsSource,
+  CandidatesStore,
   PullRequestContext,
   ReviewCandidate,
   TeamRecallConfig,

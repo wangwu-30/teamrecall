@@ -12,6 +12,7 @@ import {
   evidenceFilesFromComments,
   gitIdentityArgs,
   gitPushArgs,
+  listDirtyManagedPaths,
   openPullRequest,
   pullRequestAlreadyExists,
   stageManagedChanges,
@@ -51,6 +52,15 @@ describe("git identity and staging", () => {
     expect(args).toContain("--paginate");
     expect(args[0]).toBe("api");
     expect(AUTHORED_COMMENT_JQ).toContain("in_reply_to");
+  });
+
+  it("does not treat untracked .memory/candidates.jsonl as a dirty managed path", async () => {
+    const dir = await gitRepo();
+    await fs.mkdir(path.join(dir, ".memory"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "candidates.jsonl"), '{"id":"C-aaaaaaaaaaaa"}\n', "utf8");
+    expect(await listDirtyManagedPaths(dir)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("candidates.jsonl")]),
+    );
   });
 
   it("does not stage .memory/candidates.jsonl onto a memory PR", async () => {

@@ -194,6 +194,8 @@ export async function runLearn(input: {
     commit_messages: context.commit_messages,
     existing_memories: memories,
     candidates: reviewCandidates,
+    files: context.files,
+    title: context.title,
   });
 
   let outcome: LearnOutcome;

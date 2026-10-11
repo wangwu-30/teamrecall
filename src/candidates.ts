@@ -22,8 +22,14 @@ export function candidatesPath(projectDir: string): string {
   return path.join(projectDir, ".memory", CANDIDATES_FILENAME);
 }
 
-export function stripUrlsAndMentions(text: string): string {
+export function stripHtml(text: string): string {
   return text
+    .replace(/<img\b[^>]*>/gi, " ")
+    .replace(/<\/?[a-z][^>]*>/gi, " ");
+}
+
+export function stripUrlsAndMentions(text: string): string {
+  return stripHtml(text)
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/\[[^\]]*\]\([^)]+\)/g, " ")
     .replace(/@[a-z0-9_-]+/gi, " ");
@@ -239,6 +245,30 @@ export function pruneCandidates(
   const open = kept.filter((candidate) => !candidate.promoted_to);
   const room = Math.max(0, cap - promoted.length);
   return [...promoted, ...open.slice(0, room)];
+}
+
+export function mergeCandidateLists(
+  incoming: ReviewCandidate[],
+  existing: ReviewCandidate[],
+): ReviewCandidate[] {
+  const byId = new Map<string, ReviewCandidate>();
+  for (const candidate of existing) byId.set(candidate.id, candidate);
+  for (const candidate of incoming) {
+    const prev = byId.get(candidate.id);
+    if (!prev) {
+      byId.set(candidate.id, candidate);
+      continue;
+    }
+    const newer = candidate.date >= prev.date ? candidate : prev;
+    const older = newer === candidate ? prev : candidate;
+    byId.set(candidate.id, {
+      ...older,
+      ...newer,
+      files: unique([...prev.files, ...candidate.files]),
+      promoted_to: candidate.promoted_to || prev.promoted_to,
+    });
+  }
+  return pruneCandidates([...byId.values()]);
 }
 
 export function recordCandidates(

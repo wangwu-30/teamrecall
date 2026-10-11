@@ -108,6 +108,7 @@ export async function initProject(projectDir: string, options: InitOptions = {})
     const config: TeamRecallConfig = {
       max_active_memories: MAX_ACTIVE_MEMORIES,
       review_ttl_days: DEFAULT_TTL_DAYS,
+      candidates_store: "state_branch",
     };
     await ensureWritten(path.join(memoryDir, "config.yml"), YAML.stringify(config), created, skipped);
     await ensureWritten(path.join(memoryDir, "README.md"), memoryReadme(), created, skipped);
@@ -185,7 +186,7 @@ export async function runInitCommand(input: {
         body: [
           "Scaffolds `.memory/`, compiles agent rules, and backfills lessons from existing CLAUDE.md / AGENTS.md / `.cursor/rules` and recent merged PRs.",
           "",
-          "Learn works on day one with zero secrets (deterministic distiller) until `CLAUDE_CODE_OAUTH_TOKEN` is set.",
+          "Zero-secret mode records recurrence candidates and compiles hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI or `CLAUDE_CODE_OAUTH_TOKEN`).",
         ].join("\n"),
         files: unique(
           [...result.created, ...result.written].filter((file) => file !== input.projectDir && !file.endsWith(".memory")),
@@ -251,8 +252,8 @@ This directory stores team knowledge captured from code review.
 - \`retired/\` — Retired memories
 - Active/abandoned/superseded files stay in \`memories/\` (\`superseded\` needs \`superseded_by\`)
 - \`INDEX.md\` — Compiled index (auto-generated)
-- \`candidates.jsonl\` — Recurrence candidates (state branch only; never compiled)
-- \`config.yml\` — Configuration
+- \`candidates.jsonl\` — Recurrence gists (never compiled). Default store is the \`teamrecall/state\` branch, which is **public on public repos**. Set \`candidates_store: actions_cache\` in \`config.yml\` to keep them in Actions cache instead.
+- \`config.yml\` — Configuration (\`candidates_store: state_branch | actions_cache\`)
 
 ## Memory Format
 
@@ -296,11 +297,11 @@ function initMessage(secretSet: boolean): string {
     "Next steps:",
     secretSet
       ? "1. CLAUDE_CODE_OAUTH_TOKEN was stored with `gh secret set`."
-      : `1. Optional LLM upgrade (learn works now with zero secrets): ${HUMAN_SECRET_COMMAND}`,
+      : `1. Recurrence promotion needs an LLM engine: ${HUMAN_SECRET_COMMAND}`,
     `2. ${HUMAN_ACTIONS_SETTING}`,
     "3. Review the compiled files and merge the first memory PR.",
     "",
-    "Day-one value: existing CLAUDE.md / AGENTS.md / .cursor/rules and recent review comments are backfilled by default.",
+    "Day-one value: existing CLAUDE.md / AGENTS.md / .cursor/rules are backfilled. Zero-secret learn only records candidates; set an LLM engine to promote recurrences.",
     "See `.memory/README.md` for the memory format.",
   ].join("\n");
 }

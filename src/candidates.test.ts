@@ -5,6 +5,7 @@ import {
   generateCandidateId,
   isPromotableQuality,
   matchCandidate,
+  mergeCandidateLists,
   normalizeGist,
   pruneCandidates,
   recordCandidates,
@@ -35,6 +36,11 @@ describe("normalizeGist / extractTerms", () => {
     expect(gist).not.toContain("https");
     expect(gist).not.toContain("alice");
     expect(gist.length).toBeLessThanOrEqual(120);
+    const html = normalizeGist('Keep cookies httpOnly. <img src="https://x.test/a.png" alt="x"> <b>never</b> store them.');
+    expect(html).toContain("keep cookies httponly");
+    expect(html).not.toContain("img");
+    expect(html).not.toContain("https");
+    expect(html).toContain("never store");
     expect(extractTerms("See https://github.com/acme/app/pull/12")).not.toEqual(
       expect.arrayContaining(["https", "github", "com", "pull"]),
     );
@@ -72,20 +78,26 @@ describe("candidatesOverlap", () => {
 });
 
 describe("reviewer filters", () => {
-  it("drops author replies, URL-only, thanks, closing, and AI-disclosure comments", () => {
+  it("drops author replies, URL-only, thanks, closing, short, and author AI-disclosures", () => {
     const comments = reviewerComments([
       { body: "Keep review comments short. Do not paste a whole function into a PR comment.", author: "bob" },
+      { body: "This looks AI-generated; please write the tests by hand.", author: "bob" },
       { body: "I'll fix this in a follow-up.", author: "alice" },
       { body: "https://github.com/acme/app/pull/12", author: "carol" },
       { body: "Thanks!", author: "dave" },
       { body: "Closing this for now.", author: "erin" },
-      { body: "I'm a real person and used ChatGPT to write this.", author: "frank" },
+      { body: "Closing as stale.", author: "erin" },
+      { body: "Closing in favor of #9.", author: "erin" },
+      { body: "Superseded by the rewrite.", author: "erin" },
+      { body: "Can you resolve conflicts?", author: "erin" },
+      { body: "Looks good here.", author: "erin" },
+      { body: "I'm a real person and used ChatGPT to write this.", author: "alice" },
       { body: "Please use httpOnly cookies.", author: "bob", in_reply_to: 99 },
     ], "alice");
-    expect(comments).toEqual([{
-      body: "Keep review comments short. Do not paste a whole function into a PR comment.",
-      author: "bob",
-    }]);
+    expect(comments.map((item) => item.body)).toEqual([
+      "Keep review comments short. Do not paste a whole function into a PR comment.",
+      "This looks AI-generated; please write the tests by hand.",
+    ]);
     expect(isEligibleReviewerComment({ body: "https://example.com/a", author: "bob" }, "alice")).toBe(false);
   });
 });
@@ -122,6 +134,30 @@ describe("matchCandidate / prune / record", () => {
     expect(next.some((item) => item.pr === "#22")).toBe(true);
     expect(existing[0]!.id).toMatch(/^C-[a-f0-9]{12}$/);
     expect(generateCandidateId("a", "#1", "bob")).not.toBe(generateCandidateId("b", "#1", "bob"));
+  });
+
+  it("merges candidate lists by id and keeps promoted_to", () => {
+    const id = generateCandidateId("gateway retries", "#2", "bob");
+    const incoming = [candidate({
+      id,
+      gist: "newer gist about gateway retries",
+      pr: "#2",
+      date: "2026-10-11",
+      reviewer: "bob",
+    })];
+    const existing = [candidate({
+      id,
+      gist: "older gist about gateway retries",
+      pr: "#2",
+      date: "2026-09-01",
+      reviewer: "bob",
+      promoted_to: "M-001",
+    })];
+    const merged = mergeCandidateLists(incoming, existing);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.id).toBe(id);
+    expect(merged[0]?.promoted_to).toBe("M-001");
+    expect(merged[0]?.date).toBe("2026-10-11");
   });
 
   it("does not deterministically match two unrelated packages comments", () => {

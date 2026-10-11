@@ -33,6 +33,10 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("Load candidate state");
     expect(template).toContain("Persist candidate state");
     expect(template).toContain(".memory/candidates.jsonl");
+    expect(template).toContain("merge-candidates");
+    expect(template).toContain("fork PR");
+    expect(template).toContain("actions_cache");
+    expect(template).toContain("::warning::");
     expect(template).toContain("needs: decide");
     expect(template).toMatch(/jobs:\n  decide:/);
     expect(template).toContain("pulls/${PR}/reviews");

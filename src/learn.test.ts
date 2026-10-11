@@ -20,11 +20,14 @@ import {
   inferPathsExperimental,
   inferPathsV02,
   keepSpecificPaths,
+  matchingReviewer,
   maybePromoteFromCandidates,
   resolveMemoryPaths,
   parseDistillationResponse,
   planLearnOutcomes,
+  selectPromptCandidates,
 } from "./learn.js";
+import { CANDIDATE_PROMPT_K } from "./constants.js";
 import { generateCandidateId, loadCandidates, normalizeGist } from "./candidates.js";
 import {
   claudeDistillArgs,
@@ -147,6 +150,43 @@ describe("generateDistillationPrompt", () => {
     expect(prompt).toContain("src/auth/**");
     expect(prompt).toContain("docs/**");
     expect(prompt).not.toMatch(/changeset|mdtest|vitest|biome|ruff|tldraw/i);
+  });
+
+  it("sends only top-k candidates when 2000 exist", () => {
+    const candidates = Array.from({ length: 2000 }, (_, index) => ({
+      id: `C-${index.toString(16).padStart(12, "0")}`,
+      gist: index === 7
+        ? "register retries only in the gateway wrapper"
+        : `unrelated nit number ${index} about a changelog entry`,
+      terms: index === 7
+        ? ["register", "retries", "gateway", "wrapper"]
+        : ["unrelated", "changelog", `term${index}`],
+      files: index === 7 ? ["src/gateway.ts"] : [`docs/n${index}.md`],
+      pr: `#${index}`,
+      date: "2026-10-01",
+      reviewer: "bob",
+    }));
+    const prompt = generateDistillationPrompt({
+      pr_number: "42",
+      diff: "diff --git a/src/gateway.ts",
+      pr_body: "Move retries to the gateway wrapper.",
+      review_comments: ["Register retries only in the gateway wrapper."],
+      commit_messages: ["msg"],
+      existing_memories: [],
+      candidates,
+      files: ["src/gateway.ts"],
+      title: "Move retries to the gateway",
+    });
+    const listed = [...prompt.matchAll(/^- (C-[a-f0-9]{12}):/gm)];
+    expect(listed.length).toBeLessThanOrEqual(CANDIDATE_PROMPT_K);
+    expect(listed.length).toBeGreaterThan(0);
+    expect(prompt).toContain("C-000000000007");
+    expect(prompt.length).toBeLessThan(80_000);
+    expect(selectPromptCandidates(candidates, {
+      review_comments: ["Register retries only in the gateway wrapper."],
+      files: ["src/gateway.ts"],
+      title: "Move retries to the gateway",
+    })).toHaveLength(CANDIDATE_PROMPT_K);
   });
 });
 
@@ -611,15 +651,19 @@ describe("hasLlmSecret", () => {
 });
 
 describe("fallbackOutcomeFromReviews", () => {
-  it("creates a new memory from a directive review comment", () => {
-    const outcome = fallbackOutcomeFromReviews(context());
-    expect(outcome.action).toBe("new");
-    expect(outcome.body).toMatch(/gateway wrapper/i);
+  it("no_ops when there are no reviewer comments instead of using all comments", () => {
+    const outcome = fallbackOutcomeFromReviews(context({
+      review_comments: ["Register retries only in the gateway wrapper, never in services."],
+      reviewer_comments: [],
+    }));
+    expect(outcome.action).toBe("no_op");
+    expect(outcome.reasoning).toMatch(/no eligible reviewer comments/i);
   });
 
-  it("returns no_op when comments are not reusable", () => {
-    const outcome = fallbackOutcomeFromReviews(context({ review_comments: ["lgtm"] }));
+  it("no_ops in zero-secret mode even when a reviewer left a directive", () => {
+    const outcome = fallbackOutcomeFromReviews(context());
     expect(outcome.action).toBe("no_op");
+    expect(outcome.reasoning).toMatch(/records candidates only/i);
   });
 });
 
@@ -781,7 +825,7 @@ Old rule that should be retired.`, "utf8");
     expect(opened?.startPoint).toBe("main");
   });
 
-  it("uses the deterministic distiller when no LLM secrets are set and says so in the PR body", async () => {
+  it("records candidates only when no LLM secrets are set", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-nosecret-"));
     dirs.push(dir);
     await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
@@ -808,12 +852,16 @@ Old rule that should be retired.`, "utf8");
 
     expect(result.plan.distiller).toBe("deterministic");
     expect(result.plan.distiller_reason).toBe("no_llm_secret");
-    expect(result.plan.learned).toBe(1);
-    expect(opened?.body).toContain("deterministic distiller");
-    expect(opened?.body).toContain("CLAUDE_CODE_OAUTH_TOKEN");
-    expect(opened?.body).toContain("OPENAI_API_KEY");
-    expect(opened?.body).toContain("zero secrets");
-    expect(opened?.body).toContain(DETERMINISTIC_DISTILLER_NOTE.split("\n")[0]);
+    expect(result.plan.learned).toBe(0);
+    expect(result.plan.candidates_recorded).toBe(1);
+    expect(opened).toBeUndefined();
+    expect(result.pr_url).toBeUndefined();
+    const body = buildLearnPrBody(result.plan, context());
+    expect(body).toContain("deterministic recorder");
+    expect(body).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(body).toContain("OPENAI_API_KEY");
+    expect(body).toContain("records candidates only");
+    expect(body).toContain(DETERMINISTIC_DISTILLER_NOTE.split("\n")[0]);
   });
 
   it("keeps using an injected LLM distiller when a secret is present", async () => {
@@ -903,6 +951,61 @@ Old rule that should be retired.`, "utf8");
     expect(result.plan.distiller_reason).toBe("no_llm_secret");
     expect(buildLearnPrBody(result.plan, context())).toContain(DETERMINISTIC_DISTILLER_NOTE);
     expect(buildLearnPrBody(result.plan, context())).not.toContain("LLM call failed");
+  });
+
+  it("allows a second local learn --pr when only candidates.jsonl is untracked", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-second-learn-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "memories", ".gitkeep"), "", "utf8");
+    await exec("git", ["init", "-b", "main"], { cwd: dir });
+    await exec("git", ["add", "-A"], { cwd: dir });
+    await exec("git", ["-c", "user.name=tester", "-c", "user.email=tester@example.test", "commit", "-m", "seed"], { cwd: dir });
+
+    const first = await runLearn({
+      projectDir: dir,
+      pr: "10",
+      openPr: false,
+      deps: {
+        fetchPr: async () => context({
+          number: "10",
+          review_comments: ["Keep review comments short. Do not paste a whole function into a PR comment."],
+          reviewer_comments: [{
+            body: "Keep review comments short. Do not paste a whole function into a PR comment.",
+            author: "bob",
+          }],
+        }),
+        distill: async () => JSON.stringify({ action: "no_op", reasoning: "record" }),
+      },
+    });
+    expect(first.plan.candidates_recorded).toBe(1);
+    await exec("git", ["add", "-A"], { cwd: dir });
+    await exec("git", ["reset", "-q", "HEAD", "--", ".memory/candidates.jsonl"], { cwd: dir }).catch(() => undefined);
+    await exec("git", ["-c", "user.name=tester", "-c", "user.email=tester@example.test", "commit", "-m", "compile"], { cwd: dir });
+
+    let opened = false;
+    const second = await runLearn({
+      projectDir: dir,
+      pr: "11",
+      openPr: true,
+      deps: {
+        fetchPr: async () => context({
+          number: "11",
+          review_comments: ["Please add a changelog entry for this public API."],
+          reviewer_comments: [{
+            body: "Please add a changelog entry for this public API.",
+            author: "carol",
+          }],
+        }),
+        distill: async () => JSON.stringify({ action: "no_op", reasoning: "record again" }),
+        openPr: async () => {
+          opened = true;
+          return "https://example.test/pr/11";
+        },
+      },
+    });
+    expect(second.plan.learned).toBe(0);
+    expect(opened).toBe(false);
   });
 
   it("refuses local learn --pr when managed paths are dirty", async () => {
@@ -1268,6 +1371,54 @@ describe("recurrence promotion", () => {
     expect(parsed?.frontmatter.author).toBe("carol");
     expect(parsed?.frontmatter.evidence.prs).toEqual(["#10", "#22"]);
     expect(parsed?.frontmatter.scope).toBe("triggered");
+  });
+
+  it("attributes the memory to the matching comment author, not the first reviewer", () => {
+    const existing = [{
+      id: styleId,
+      gist: normalizeGist(styleComment),
+      terms: ["keep", "short", "paste"],
+      files: [],
+      pr: "#10",
+      date: "2026-10-01",
+      reviewer: "bob",
+    }];
+    const ctx = styleContext("22", {
+      reviewer_comments: [
+        { body: "Please add a changelog entry for this public API.", author: "dave" },
+        { body: styleCommentAgain, author: "carol" },
+      ],
+    });
+    expect(matchingReviewer(ctx, existing[0], styleCommentAgain)).toBe("carol");
+    const planned = planLearnOutcomes({
+      action: "promote",
+      candidate_id: styleId,
+      title: "Short comments",
+      body: styleCommentAgain,
+      reasoning: "matched carol",
+    }, [], ctx, "/tmp/project", 90, [], false, existing);
+    expect(parseMemory(planned.mutations[0]?.content ?? "")?.frontmatter.author).toBe("carol");
+  });
+
+  it("does not apply the quality gate to an LLM promotion", () => {
+    const existing = [{
+      id: styleId,
+      gist: normalizeGist(styleComment),
+      terms: ["keep", "short", "paste"],
+      files: [],
+      pr: "#10",
+      date: "2026-10-01",
+      reviewer: "bob",
+    }];
+    const planned = planLearnOutcomes({
+      action: "promote",
+      candidate_id: styleId,
+      title: "Short comments",
+      body: "Can we keep review comments short and never paste a whole function?",
+      reasoning: "LLM named the candidate",
+    }, [], styleContext("22"), "/tmp/project", 90, [], false, existing);
+    expect(planned.learned).toBe(1);
+    expect(planned.outcomes[0]?.action).toBe("promote");
   });
 
   it("allows always after promotion only with two PRs and two reviewers", () => {

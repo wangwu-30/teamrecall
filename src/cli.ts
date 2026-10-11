@@ -2,6 +2,8 @@
 
 import { program } from "commander";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
+import { mergeCandidateLists, parseCandidatesJsonl, serializeCandidatesJsonl } from "./candidates.js";
 import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { runDoctor } from "./doctor.js";
 import { runInitCommand } from "./init.js";
@@ -174,6 +176,27 @@ program
         return;
       }
       process.stdout.write(formatRetrieveText(result));
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("merge-candidates")
+  .description("Merge two candidates.jsonl files by id (used by the state-branch workflow)")
+  .argument("<incoming>", "Incoming candidates.jsonl")
+  .argument("[existing]", "Existing candidates.jsonl from teamrecall/state")
+  .option("-o, --out <path>", "Write merged jsonl here (default: stdout)")
+  .action(async (incoming: string, existing: string | undefined, options: { out?: string }) => {
+    try {
+      const left = parseCandidatesJsonl(await fs.readFile(incoming, "utf8").catch(() => ""));
+      const right = existing
+        ? parseCandidatesJsonl(await fs.readFile(existing, "utf8").catch(() => ""))
+        : [];
+      const merged = serializeCandidatesJsonl(mergeCandidateLists(left, right));
+      if (options.out) await fs.writeFile(options.out, merged, "utf8");
+      else process.stdout.write(merged);
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);

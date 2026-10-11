@@ -251,13 +251,22 @@ export function isManagedPath(file: string): boolean {
   return MANAGED_GIT_PATHS.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
 }
 
+export function isCandidateStatePath(file: string): boolean {
+  const normalized = file.replace(/^"|"$/g, "").replace(/\\/g, "/").replace(/^.* -> /, "");
+  return normalized === ".memory/candidates.jsonl" || normalized.endsWith("/.memory/candidates.jsonl");
+}
+
 export async function listDirtyManagedPaths(cwd: string): Promise<string[]> {
   const stdout = await run("git", ["status", "--porcelain", "--untracked-files=all"], cwd);
   return stdout
     .split("\n")
     .map((line) => line.trimEnd())
     .filter(Boolean)
-    .filter((line) => isManagedPath(line.slice(3)));
+    .filter((line) => {
+      const file = line.slice(3);
+      if (isCandidateStatePath(file)) return false;
+      return isManagedPath(file);
+    });
 }
 
 export async function assertManagedPathsClean(cwd: string): Promise<void> {

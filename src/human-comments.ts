@@ -64,7 +64,7 @@ export function isThanksComment(text: string): boolean {
 }
 
 export function isClosingOrReopenComment(text: string): boolean {
-  return /\b(closing this|i('?ll| will) close|reopen(ing)? this|closed this)\b/i.test(text);
+  return /\b(closing this|i('?ll| will) close|reopen(ing)? this|closed this|closing in favor of|closing as stale|superseded by|can you resolve conflicts|resolve conflicts)\b/i.test(text);
 }
 
 export function isAiDisclosureComment(text: string): boolean {
@@ -75,24 +75,37 @@ export function isAiDisclosureComment(text: string): boolean {
   );
 }
 
+export function commentWordCount(text: string): number {
+  return text
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
 export function isLowSignalComment(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return true;
   if (isLinkOnlyComment(trimmed)) return true;
   if (isThanksComment(trimmed)) return true;
   if (isClosingOrReopenComment(trimmed)) return true;
-  if (isAiDisclosureComment(trimmed)) return true;
+  if (commentWordCount(trimmed) < 5) return true;
   return false;
 }
 
 export function isEligibleReviewerComment(comment: AuthoredComment, prAuthor: string): boolean {
   if (!comment.body.trim()) return false;
   if (isBotAuthor(comment.author, comment.user_type)) return false;
-  if (comment.author.trim().toLowerCase() === prAuthor.trim().toLowerCase()) return false;
+  const author = comment.author.trim().toLowerCase();
+  const owner = prAuthor.trim().toLowerCase();
+  if (author === owner) return false;
   if (comment.in_reply_to !== undefined && comment.in_reply_to !== null && comment.in_reply_to !== "") {
     return false;
   }
   if (isLowSignalComment(comment.body)) return false;
+  // Only the PR author's own AI / "real person" disclosures are dropped (already
+  // excluded above). Maintainer comments that mention AI-generated content stay.
   return true;
 }
 

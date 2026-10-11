@@ -110,7 +110,7 @@ No manual wiki updates. No asking around. Just works.
 Follow https://github.com/wangwu-30/teamrecall/blob/main/INSTALL.md to set up teamrecall in this repo
 ```
 
-The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y github:wangwu-30/teamrecall#<latest-tag> init --yes --json`, backfills, compiles, runs `doctor`, and opens the first PR. Re-run is safe. Learn works with zero secrets (deterministic distiller) until you set `CLAUDE_CODE_OAUTH_TOKEN`.
+The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y github:wangwu-30/teamrecall#<latest-tag> init --yes --json`, backfills, compiles, runs `doctor`, and opens the first PR. Re-run is safe. Zero-secret mode only collects recurrence candidates and compiles existing hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI or `CLAUDE_CODE_OAUTH_TOKEN`).
 
 **Or run it yourself:**
 
@@ -235,7 +235,7 @@ npx -y github:wangwu-30/teamrecall#v0.3.0 compile
 # Check installation
 npx -y github:wangwu-30/teamrecall#v0.3.0 doctor
 
-# Learn from a PR (no LLM secret → deterministic distiller)
+# Learn from a PR (no LLM → record candidates only; promotion needs claude/codex or an API key)
 npx -y github:wangwu-30/teamrecall#v0.3.0 learn 42
 
 # Experimental: rank memories for a change (opt-in; not used by default compile)
@@ -244,7 +244,11 @@ npx -y github:wangwu-30/teamrecall#v0.3.0 retrieve -- src/foo.ts
 
 `teamrecall retrieve` is experimental. Default compile still writes path-scoped rules and the root index the same way as v0.2; retrieve is an extra command, not wired into init/learn/compile.
 
+Candidate gists default to the `teamrecall/state` branch, which is **public on public repos**. Set `candidates_store: actions_cache` in `.memory/config.yml` to keep them in Actions cache instead.
+
 `teamrecall retrieve` 是实验功能。默认编译仍按 v0.2 写出路径规则和根索引；retrieve 是额外命令，不会接入 init/learn/compile。
+
+候选 gist 默认写在 `teamrecall/state` 分支上，**公开仓库上该分支也是公开的**。若要避免进 git，在 `.memory/config.yml` 里设 `candidates_store: actions_cache`。
 
 ---
 
