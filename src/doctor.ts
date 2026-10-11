@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { listStaleGeneratedRules } from "./compiler.js";
+import { generateCompactIndex, indexIsCapped, listStaleGeneratedRules } from "./compiler.js";
 import { TEAMRECALL_START } from "./constants.js";
 import { commandExists } from "./github.js";
 import { loadMemories, validateSupersededBy } from "./memory.js";
@@ -107,6 +107,17 @@ export async function runDoctor(projectDir: string): Promise<DoctorResult> {
     "stale_generated_rules",
     stale.length === 0,
     stale.length === 0 ? "no stale generated rules" : stale.map((file) => path.relative(projectDir, file)).join(", "),
+    "warning",
+  );
+  const active = memories.filter((memory) => memory.frontmatter.status === "active");
+  const abandoned = memories.filter((memory) => memory.frontmatter.status === "abandoned");
+  const indexBlock = generateCompactIndex(active, abandoned);
+  add(
+    "index_length",
+    !indexIsCapped(indexBlock),
+    indexIsCapped(indexBlock)
+      ? `AGENTS.md index hit the ${indexBlock.split("\n").length}-line cap; triggered memories are title-only and some are omitted`
+      : `${indexBlock.split("\n").length} index lines`,
     "warning",
   );
 

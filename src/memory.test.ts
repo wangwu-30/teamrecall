@@ -7,8 +7,10 @@ import {
   countWords,
   formatMemory,
   generateMemoryId,
+  defaultScope,
   isValidFrontmatter,
   loadMemories,
+  memoryScope,
   parseMemory,
   reviewAfterDate,
   slugify,
@@ -86,6 +88,44 @@ Body`;
     })).toBe(false);
   });
 
+  it("accepts scope and triggers and rejects invalid ones", () => {
+    const base = {
+      id: "M-010",
+      kind: "convention",
+      paths: [".changeset/*.md"],
+      author: "a",
+      created: "2026-10-10",
+      review_after: "2027-01-08",
+      status: "active",
+    };
+    expect(isValidFrontmatter({
+      ...base,
+      scope: "triggered",
+      triggers: [{ glob: ".changeset/*.md", contains: "changeset" }],
+    })).toBe(true);
+    expect(isValidFrontmatter({ ...base, scope: "always" })).toBe(true);
+    expect(isValidFrontmatter({ ...base, scope: "sometimes" })).toBe(false);
+    expect(isValidFrontmatter({ ...base, triggers: [{ contains: "x" }] })).toBe(false);
+    expect(parseMemory(`---
+id: M-010
+kind: convention
+paths: [".changeset/*.md"]
+scope: triggered
+triggers:
+  - glob: ".changeset/*.md"
+    contains: changeset
+author: a
+created: "2026-10-10"
+review_after: "2027-01-08"
+status: active
+---
+
+Every user-facing change needs a changeset.
+`)).toMatchObject({
+      frontmatter: { scope: "triggered" },
+    });
+  });
+
   it("rejects an id that is not M-digits", () => {
     expect(isValidFrontmatter({
       id: "memory-1",
@@ -96,6 +136,27 @@ Body`;
       review_after: "2027-01-08",
       status: "active",
     })).toBe(false);
+  });
+});
+
+describe("defaultScope", () => {
+  it("defaults to always for process/style rules and triggered for specific paths", () => {
+    expect(defaultScope(["**/*"], "Keep review comments short on every PR.")).toBe("always");
+    expect(defaultScope([".changeset/*.md"], "Every user-facing change needs a changeset.")).toBe("triggered");
+    expect(memoryScope({
+      frontmatter: {
+        id: "M-001",
+        kind: "convention",
+        paths: [".changeset/*.md"],
+        evidence: {},
+        author: "a",
+        created: "2026-10-10",
+        review_after: "2027-01-08",
+        status: "active",
+      },
+      body: "Every user-facing change needs a changeset.",
+      filepath: "/tmp/M-001.md",
+    })).toBe("triggered");
   });
 });
 

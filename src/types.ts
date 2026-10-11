@@ -1,11 +1,20 @@
 export type MemoryKind = "gotcha" | "decision" | "convention" | "map";
 export type MemoryStatus = "active" | "retired" | "superseded" | "abandoned";
+export type MemoryScope = "always" | "triggered";
 export type LearnAction = "reuse" | "update" | "merge" | "propose_retire" | "new" | "no_op";
+
+export interface MemoryTrigger {
+  glob: string;
+  contains?: string;
+  pr?: string;
+}
 
 export interface MemoryFrontmatter {
   id: string;
   kind: MemoryKind;
   paths: string[];
+  scope?: MemoryScope;
+  triggers?: MemoryTrigger[];
   evidence: {
     pr?: string;
     review_url?: string;
@@ -36,6 +45,8 @@ export interface LearnOutcome {
   title?: string;
   kind?: MemoryKind;
   paths?: string[];
+  scope?: MemoryScope;
+  triggers?: MemoryTrigger[];
   body?: string;
   reasoning: string;
   memories?: LearnOutcome[];
@@ -64,4 +75,5 @@ export interface PullRequestContext {
   commit_messages: string[];
   commits: string[];
   files: string[];
+  evidence_files: string[];
 }

@@ -123,6 +123,7 @@ export async function listRepoFiles(projectDir: string): Promise<string[]> {
       const { stdout } = await exec("git", ["ls-files", "-z"], {
         cwd: projectDir,
         encoding: "utf8",
+        timeout: 15_000,
         maxBuffer: 8 * 1024 * 1024,
       });
       return stdout.split("\0").filter(Boolean);

@@ -7,6 +7,7 @@ import {
   TEAMRECALL_END,
   TEAMRECALL_START,
 } from "./constants.js";
+import { memoryScope } from "./memory.js";
 import type { CompiledOutput, Memory } from "./types.js";
 import { exists, readText, replaceManagedBlock, writeAtomic } from "./utils/atomic.js";
 
@@ -90,8 +91,12 @@ export function generateCompactIndex(active: Memory[], abandoned: Memory[] = [])
   const footer = ["", "See `.memory/INDEX.md` for full details.", CLAUDE_INDEX_IMPORT];
   const reserved = header.length + footer.length + (abandoned.length > 0 ? 3 : 0);
   const items: string[] = [];
+  const ordered = [
+    ...active.filter((memory) => memoryScope(memory) === "always"),
+    ...active.filter((memory) => memoryScope(memory) === "triggered"),
+  ];
 
-  for (const memory of active) {
+  for (const memory of ordered) {
     items.push(compactLine(memory));
     if (reserved + items.length + 1 > AGENTS_INDEX_MAX_LINES) {
       items.pop();
@@ -121,19 +126,26 @@ export function generateAgentsMdBlock(memories: Memory[]): string {
   return generateCompactIndex(active, abandoned);
 }
 
-function compactLine(memory: Memory): string {
-  const title = extractTitle(memory.body);
-  const paths = memory.frontmatter.paths.length > 0
-    ? ` (${memory.frontmatter.paths.slice(0, 2).join(", ")})`
-    : "";
-  return `- **${memory.frontmatter.id}**: ${title}${paths}`;
+export function compactLine(memory: Memory): string {
+  if (memoryScope(memory) === "always") {
+    const oneLiner = memory.body.replace(/\s+/g, " ").trim();
+    return `- **${memory.frontmatter.id}** [always]: ${oneLiner}`;
+  }
+  return `- **${memory.frontmatter.id}**: ${extractTitle(memory.body)}`;
+}
+
+export function indexIsCapped(block: string): boolean {
+  return block.includes("…and ");
 }
 
 function generateClaudeRules(memories: Memory[]): Map<string, string> {
   const rules = new Map<string, string>();
 
   for (const memory of memories) {
-    const paths = memory.frontmatter.paths;
+    const scope = memoryScope(memory);
+    const paths = scope === "always"
+      ? ["**"]
+      : memory.frontmatter.paths;
     const frontmatter = paths.length > 0
       ? ["---", "paths:", ...paths.map((glob) => `  - ${JSON.stringify(glob)}`), "---"].join("\n")
       : "---\n---";
@@ -160,19 +172,21 @@ function generateCursorRules(memories: Memory[]): Map<string, string> {
 
   for (const memory of memories) {
     const title = extractTitle(memory.body);
+    const scope = memoryScope(memory);
     const paths = memory.frontmatter.paths;
-    const frontmatter = paths.length > 0
+    const always = scope === "always" || paths.length === 0;
+    const frontmatter = always
       ? [
           "---",
           `description: ${JSON.stringify(`${memory.frontmatter.id}: ${title}`)}`,
-          `globs: ${paths.join(", ")}`,
-          "alwaysApply: false",
+          "alwaysApply: true",
           "---",
         ].join("\n")
       : [
           "---",
           `description: ${JSON.stringify(`${memory.frontmatter.id}: ${title}`)}`,
-          "alwaysApply: true",
+          `globs: ${paths.join(", ")}`,
+          "alwaysApply: false",
           "---",
         ].join("\n");
 

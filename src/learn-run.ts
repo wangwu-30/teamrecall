@@ -22,6 +22,7 @@ import {
   type LearnPlan,
 } from "./learn.js";
 import { loadConfig, loadMemories } from "./memory.js";
+import { listRepoFiles } from "./sweep.js";
 import type { LearnOutcome, PullRequestContext } from "./types.js";
 
 export interface LearnRunDeps {
@@ -203,7 +204,8 @@ export async function runLearn(input: {
     }
   }
 
-  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days);
+  const trackedFiles = await listRepoFiles(projectDir);
+  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles);
   plan.distiller = distiller;
   plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);

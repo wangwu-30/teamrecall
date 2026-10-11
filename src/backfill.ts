@@ -5,6 +5,7 @@ import { compileMemories, writeCompiledFiles } from "./compiler.js";
 import { fallbackOutcomeFromReviews, planLearnOutcomes } from "./learn.js";
 import {
   clampBody,
+  defaultScope,
   formatMemory,
   generateMemoryId,
   isoDate,
@@ -113,6 +114,7 @@ export async function backfillProject(
         commit_messages: [],
         commits: [],
         files: [source],
+        evidence_files: [source],
       }, ttlDays);
       if (file) {
         created.push(file);
@@ -163,6 +165,7 @@ async function writeNewMemory(
     id,
     kind: lesson.kind ?? "convention",
     paths: lesson.paths ?? ["**/*"],
+    scope: lesson.scope ?? defaultScope(lesson.paths ?? ["**/*"], lesson.body ?? ""),
     evidence: { pr: context.number === "backfill" ? undefined : `#${context.number}` },
     author: context.author,
     created,

@@ -16,6 +16,8 @@ import {
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
+  inferPaths,
+  keepSpecificPaths,
   parseDistillationResponse,
   planLearnOutcomes,
 } from "./learn.js";
@@ -66,6 +68,7 @@ function context(partial: Partial<PullRequestContext> = {}): PullRequestContext 
     commit_messages: ["fix ci: register retry in wrapper"],
     commits: ["abc123"],
     files: ["src/gateway.ts"],
+    evidence_files: [],
     ...partial,
     review_comments: partial.review_comments ?? review_comments,
     human_review_comments: partial.human_review_comments ?? partial.review_comments ?? review_comments,
@@ -106,6 +109,43 @@ describe("generateDistillationPrompt", () => {
     });
     expect(prompt).toContain("M-001");
     expect(prompt).toContain("no_op");
+    expect(prompt).toContain(".changeset/*.md");
+    expect(prompt).toContain('"scope": "always|triggered"');
+    expect(prompt).toContain("triggers");
+    expect(prompt).toMatch(/Never collapse.*packages\/\*\*\/\*/);
+  });
+});
+
+describe("inferPaths", () => {
+  it("keeps dot-directories and emits file / parent / extension globs", () => {
+    const globs = inferPaths([".changeset/loose-hats-cough.md"]);
+    expect(globs).toContain(".changeset/loose-hats-cough.md");
+    expect(globs).toContain(".changeset/*");
+    expect(globs).toContain(".changeset/*.md");
+    expect(globs.some((glob) => glob.startsWith("crates/") || glob.startsWith("packages/"))).toBe(false);
+  });
+
+  it("does not collapse a monorepo to packages/**/*", () => {
+    const globs = inferPaths([
+      "packages/vitest/src/node/cli.ts",
+      "packages/browser/src/client.ts",
+    ]);
+    expect(globs).not.toContain("packages/**/*");
+    expect(globs).toContain("packages/vitest/src/node/*.ts");
+    expect(globs).toContain("packages/browser/src/*.ts");
+  });
+
+  it("keeps distiller paths that match tracked files and drops overly-broad top-level globs", () => {
+    expect(keepSpecificPaths(
+      [".changeset/*.md"],
+      [".changeset/loose-hats-cough.md", "crates/foo.rs"],
+      [".changeset/loose-hats-cough.md"],
+    )).toEqual([".changeset/*.md"]);
+    expect(keepSpecificPaths(
+      ["packages/**/*"],
+      ["packages/a/src/x.ts"],
+      ["packages/a/src/x.ts"],
+    )).toContain("packages/a/src/*.ts");
   });
 });
 

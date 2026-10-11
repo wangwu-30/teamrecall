@@ -1,5 +1,5 @@
 export { backfillProject, collectRuleSources, extractRuleLessons } from "./backfill.js";
-export { compileMemories, generateCompactIndex, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
+export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
 export {
   AGENTS_INDEX_MAX_LINES,
   CLAUDE_INDEX_IMPORT,
@@ -29,6 +29,8 @@ export {
   generateDistillationPrompt,
   parseDistillationResponse,
   detectConflicts,
+  inferPaths,
+  keepSpecificPaths,
   pathsOverlap,
   planLearnOutcomes,
 } from "./learn.js";
@@ -47,20 +49,25 @@ export {
   countWords,
   formatMemory,
   generateMemoryId,
+  defaultScope,
   isValidFrontmatter,
   loadConfig,
   loadMemories,
+  memoryScope,
   parseMemory,
   slugify,
   validateMemoryBody,
   validateSupersededBy,
 } from "./memory.js";
+export { formatRetrieveText, runRetrieve, tokenize } from "./retrieve.js";
 export { expandBraces, formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
 export type {
   CompiledOutput,
   LearnOutcome,
   Memory,
   MemoryFrontmatter,
+  MemoryScope,
+  MemoryTrigger,
   PullRequestContext,
   TeamRecallConfig,
 } from "./types.js";

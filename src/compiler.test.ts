@@ -12,6 +12,8 @@ function memory(partial: Partial<Memory["frontmatter"]> & { id: string; body?: s
       id: partial.id,
       kind: partial.kind ?? "gotcha",
       paths: partial.paths ?? ["src/**/*.ts"],
+      scope: partial.scope,
+      triggers: partial.triggers,
       evidence: partial.evidence ?? { pr: "#42" },
       author: partial.author ?? "alice",
       created: partial.created ?? "2026-10-10",
@@ -91,6 +93,33 @@ describe("compileMemories", () => {
     expect(cursorRule).toContain("globs: src/**/*.ts, lib/**/*.ts");
     expect(cursorRule).toContain("alwaysApply: false");
     expect(cursorRule).toContain('description: "M-001:');
+  });
+
+  it("puts always memories in the root index as full one-liners and triggered as titles", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-001",
+        scope: "always",
+        paths: ["**/*"],
+        body: "Keep review comments short. Do not paste a whole function into a PR comment.",
+      }),
+      memory({
+        id: "M-002",
+        scope: "triggered",
+        paths: [".changeset/*.md"],
+        body: "Every user-facing change needs a changeset file.",
+      }),
+    ]);
+    expect(compiled.agents_md).toContain("[always]: Keep review comments short.");
+    expect(compiled.agents_md).toContain("**M-002**: Every user-facing change needs a changeset file.");
+    expect(compiled.agents_md).not.toContain("[always]: Every user-facing change");
+    const alwaysRule = compiled.claude_rules.get("M-001.md");
+    expect(alwaysRule).toContain('- "**"');
+    const triggered = compiled.claude_rules.get("M-002.md");
+    expect(triggered).toContain('- ".changeset/*.md"');
+    expect(compiled.cursor_rules.get("teamrecall-M-001.mdc")).toContain("alwaysApply: true");
+    expect(compiled.cursor_rules.get("teamrecall-M-002.mdc")).toContain("globs: .changeset/*.md");
+    expect(compiled.cursor_rules.get("teamrecall-M-002.mdc")).toContain("alwaysApply: false");
   });
 
   it("keeps the AGENTS.md index at or under 40 lines", async () => {

@@ -52,6 +52,9 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
 
   const authored = await fetchAuthoredComments(pr, cwd);
   const human_review_comments = humanCommentBodies(authored);
+  const evidence_files = unique(
+    authored.map((comment) => comment.path).filter((item): item is string => Boolean(item)),
+  );
   const merged = Boolean(view.mergedAt) || view.state === "MERGED";
   const review_comments = merged
     ? unique(authored.map((comment) => comment.body.trim()).filter(Boolean))
@@ -74,6 +77,7 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
     commit_messages,
     commits,
     files: (view.files ?? []).map((file) => file.path).filter((item): item is string => Boolean(item)),
+    evidence_files,
   };
 }
 
@@ -89,7 +93,7 @@ export async function fetchAuthoredComments(pr: string, cwd: string): Promise<Au
       const rows = JSON.parse(await run("gh", [
         "api",
         endpoint,
-        "--jq", "[.[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type}]",
+        "--jq", "[.[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type, path: .path}]",
       ], cwd)) as AuthoredComment[];
       comments.push(...rows.filter((comment) => comment.body?.trim()));
     } catch {

@@ -7,6 +7,7 @@ import { runDoctor } from "./doctor.js";
 import { runInitCommand } from "./init.js";
 import { runLearn, shouldOpenLearnPr } from "./learn-run.js";
 import { loadMemories } from "./memory.js";
+import { formatRetrieveText, runRetrieve } from "./retrieve.js";
 import { formatSweepReport, runSweep } from "./sweep.js";
 
 program
@@ -144,6 +145,38 @@ program
   });
 
 program
+  .command("retrieve")
+  .description("Rank memories for changed files (trigger/glob filter, then BM25). No LLM.")
+  .argument("[files...]", "Changed file paths")
+  .option("-d, --dir <path>", "Project directory", process.cwd())
+  .option("--title <title>", "PR or task title")
+  .option("--body <body>", "PR or task body")
+  .option("-k, --top <n>", "Top-k triggered memories", "5")
+  .option("--json", "Print JSON instead of text")
+  .action(async (files: string[], options) => {
+    try {
+      const projectDir = path.resolve(options.dir);
+      const diff = process.stdin.isTTY ? "" : await readStdin();
+      const result = await runRetrieve({
+        projectDir,
+        files,
+        diff,
+        title: options.title,
+        body: options.body,
+        k: Number.parseInt(String(options.top), 10) || 5,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      process.stdout.write(formatRetrieveText(result));
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command("sweep")
   .description("Flag expired and path-dead memories; optionally open a review PR")
   .option("-d, --dir <path>", "Project directory", process.cwd())
@@ -159,5 +192,13 @@ program
       process.exit(1);
     }
   });
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 program.parse();
