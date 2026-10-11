@@ -52,11 +52,43 @@ export function shouldLearnFromClosedPr(input: {
 }
 
 export function isLinkOnlyComment(text: string): boolean {
-  const stripped = text
+  const hadLink = /https?:\/\/\S+/i.test(text) || /\[[^\]]*\]\([^)]+\)/.test(text);
+  if (!hadLink) return false;
+  return residualLetters(text).length < 8;
+}
+
+export function isTinyComment(text: string): boolean {
+  return residualLetters(text).length < 4;
+}
+
+export function isEmptyOrPureSuggestionBlock(text: string): boolean {
+  if (!/```suggestion|~~~suggestion/i.test(text)) return false;
+  const without = text
+    .replace(/```suggestion[^\n]*\n?[\s\S]*?```/gi, "")
+    .replace(/~~~suggestion[^\n]*\n?[\s\S]*?~~~/gi, "")
+    .replace(/```suggestion[\s\S]*$/gi, "")
+    .replace(/~~~suggestion[\s\S]*$/gi, "");
+  return without.replace(/[-*_ \t\n`]/g, "").length === 0;
+}
+
+export function isImageOrGifComment(text: string): boolean {
+  const hadImage = /!\[[^\]]*\]\([^)]+\)/.test(text)
+    || /<img\b/i.test(text)
+    || /https?:\/\/\S+\.(?:gif|png|jpe?g|webp|svg)(?:\?\S*)?/i.test(text)
+    || /user-attachments\/assets\//i.test(text)
+    || /\.gif\b/i.test(text);
+  if (!hadImage) return false;
+  return residualLetters(text).length < 8;
+}
+
+function residualLetters(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/\[[^\]]*\]\([^)]+\)/g, " ")
+    .replace(/<img\b[^>]*>/gi, " ")
     .replace(/[^\p{L}\p{N}]+/gu, "");
-  return stripped.length < 8;
 }
 
 export function isThanksComment(text: string): boolean {
@@ -89,8 +121,12 @@ export function isLowSignalComment(text: string): boolean {
   if (!trimmed) return true;
   if (isThanksComment(trimmed)) return true;
   if (isClosingOrReopenComment(trimmed)) return true;
-  if (hasCodeOrIdentifier(trimmed)) return false;
+  // Noise first — URLs, suggestion fences, and GIFs often contain identifier-like tokens.
   if (isLinkOnlyComment(trimmed)) return true;
+  if (isTinyComment(trimmed)) return true;
+  if (isEmptyOrPureSuggestionBlock(trimmed)) return true;
+  if (isImageOrGifComment(trimmed)) return true;
+  if (hasCodeOrIdentifier(trimmed)) return false;
   if (commentWordCount(trimmed) < 5) return true;
   return false;
 }

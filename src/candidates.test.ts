@@ -99,6 +99,19 @@ describe("reviewer filters", () => {
       "This looks AI-generated; please write the tests by hand.",
     ]);
     expect(isEligibleReviewerComment({ body: "https://example.com/a", author: "bob" }, "alice")).toBe(false);
+    expect(isEligibleReviewerComment({
+      body: "https://github.com/astral-sh/ruff/blob/main/crates/ruff_linter/src/rules/foo.rs",
+      author: "bob",
+    }, "alice")).toBe(false);
+    expect(isEligibleReviewerComment({
+      body: "```suggestion\nuse Box<T>\n```",
+      author: "bob",
+    }, "alice")).toBe(false);
+    expect(isEligibleReviewerComment({
+      body: "![image](https://github.com/user-attachments/assets/abcd1234.gif)",
+      author: "bob",
+    }, "alice")).toBe(false);
+    expect(isEligibleReviewerComment({ body: "ok", author: "bob" }, "alice")).toBe(false);
     expect(isEligibleReviewerComment({ body: "Use `Box<T>`.", author: "bob" }, "alice")).toBe(true);
     expect(isEligibleReviewerComment({ body: "Use FooBar.", author: "bob" }, "alice")).toBe(true);
     expect(isEligibleReviewerComment({ body: "call foo_bar.", author: "bob" }, "alice")).toBe(true);

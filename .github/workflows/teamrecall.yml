@@ -91,8 +91,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .memory
-          if ! git fetch origin +teamrecall/state:teamrecall/state; then
-            echo "::warning::Could not fetch teamrecall/state (missing branch or read-only token)"
+          if git ls-remote --exit-code origin refs/heads/teamrecall/state >/dev/null 2>&1; then
+            if ! git fetch origin +teamrecall/state:teamrecall/state; then
+              echo "::warning::Could not fetch teamrecall/state (read-only token)"
+            fi
+          else
+            echo "::notice::teamrecall/state does not exist yet (first run)"
           fi
           git show teamrecall/state:.memory/candidates.jsonl > .memory/candidates.jsonl 2>/dev/null || true
 
@@ -117,8 +121,12 @@ jobs:
           DEF="${{ github.event.repository.default_branch }}"
           cp .memory/candidates.jsonl "$INCOMING"
           merge_remote() {
-            if ! git fetch origin +teamrecall/state:teamrecall/state; then
-              echo "::warning::Could not fetch teamrecall/state (missing branch or read-only token)"
+            if git ls-remote --exit-code origin refs/heads/teamrecall/state >/dev/null 2>&1; then
+              if ! git fetch origin +teamrecall/state:teamrecall/state; then
+                echo "::warning::Could not fetch teamrecall/state (read-only token)"
+              fi
+            else
+              echo "::notice::teamrecall/state does not exist yet (first run)"
             fi
             git show teamrecall/state:.memory/candidates.jsonl > "$REMOTE" 2>/dev/null || : > "$REMOTE"
             $TEAMRECALL_BIN merge-candidates "$INCOMING" "$REMOTE" --out "$MERGED"

@@ -17,3 +17,6 @@ export const COMPILE_TRIGGERED_CAP = 10;
 export const COMPILE_ALWAYS_CAP = 8;
 export const CANDIDATE_PROMPT_K = 50;
 export const CANDIDATE_PROMPT_PER_COMMENT = 20;
+export const CANDIDATE_PROMPT_GUARANTEED = 5;
+export const CANDIDATE_PROMPT_FILES = 3;
+export const PROMPT_CONTEXT_CHARS = 8000;

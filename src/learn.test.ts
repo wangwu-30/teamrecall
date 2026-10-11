@@ -15,6 +15,7 @@ import {
   detectConflicts,
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
+  capPromptContext,
   generateDistillationPrompt,
   inferPaths,
   inferPathsExperimental,
@@ -27,7 +28,7 @@ import {
   planLearnOutcomes,
   selectPromptCandidates,
 } from "./learn.js";
-import { CANDIDATE_PROMPT_K } from "./constants.js";
+import { CANDIDATE_PROMPT_FILES, CANDIDATE_PROMPT_K, PROMPT_CONTEXT_CHARS } from "./constants.js";
 import { generateCandidateId, loadCandidates, normalizeGist } from "./candidates.js";
 import {
   claudeDistillArgs,
@@ -197,6 +198,82 @@ describe("generateDistillationPrompt", () => {
     });
     expect(prompt).toContain(hitId);
     expect(prompt.length).toBeLessThan(80_000);
+  });
+
+  it("caps PR body, comment heads, and candidate files on a giant PR", () => {
+    const comments = Array.from({ length: 40 }, (_, index) => (
+      `HEADMARK-${index} keep this rule visible in the prompt. ${"padding ".repeat(400)}`
+    ));
+    const prBody = `PRBODY-START mention the change in every PR description. ${"lorem ".repeat(5000)}`;
+    const candidates = Array.from({ length: 80 }, (_, index) => ({
+      id: `C-${index.toString(16).padStart(12, "0")}`,
+      gist: `candidate gist ${index} about a changelog entry`,
+      terms: ["changelog", "entry", `n${index}`],
+      files: Array.from({ length: 20 }, (_, file) => `src/mod${index}/file${file}.ts`),
+      pr: `#${index}`,
+      date: "2026-10-01",
+      reviewer: "bob",
+    }));
+    const capped = capPromptContext(prBody, comments);
+    expect(capped.body.length + capped.comments.length).toBeLessThanOrEqual(PROMPT_CONTEXT_CHARS + 16);
+    expect(capped.body).toContain("PRBODY-START");
+    expect(capped.body).toContain("...(truncated)");
+    for (const index of [0, 1, 20, 39]) {
+      expect(capped.comments).toContain(`HEADMARK-${index}`);
+    }
+
+    const prompt = generateDistillationPrompt({
+      pr_number: "99",
+      diff: `diff --git a/src/a.ts b/src/a.ts\n${"+x\n".repeat(4000)}`,
+      pr_body: prBody,
+      review_comments: comments,
+      commit_messages: Array.from({ length: 30 }, (_, index) => `commit ${index} ${"x".repeat(200)}`),
+      existing_memories: [],
+      candidates,
+      files: ["src/mod0/file0.ts"],
+      reviewer_comments: comments.map((body, index) => ({ body, path: `src/mod${index}/file0.ts` })),
+    });
+    expect(prompt).toContain("PRBODY-START");
+    expect(prompt).toContain("HEADMARK-0");
+    expect(prompt).toContain("HEADMARK-39");
+    expect(prompt).toContain("src/mod0/file0.ts");
+    expect(prompt).toContain("src/mod0/file2.ts");
+    expect(prompt).not.toContain("src/mod0/file3.ts");
+    expect(prompt).toContain(`+${20 - CANDIDATE_PROMPT_FILES}`);
+    expect(prompt.length).toBeLessThan(40_000);
+  });
+
+  it("guarantees a few slots per current comment before filling by global rank", () => {
+    const changelog = Array.from({ length: 60 }, (_, index) => ({
+      id: `C-a${index.toString(16).padStart(11, "0")}`,
+      gist: `please add a changelog entry number ${index} for this public API`,
+      terms: ["changelog", "entry", "public", "api", `n${index}`],
+      files: ["docs/changelog.md"],
+      pr: `#${index}`,
+      date: "2026-10-01",
+      reviewer: "bob",
+    }));
+    const hit = {
+      id: "C-bbbbbbbbbbbb",
+      gist: "keep review comments short do not paste a whole function",
+      terms: ["keep", "short", "paste", "whole"],
+      files: ["src/review.ts"],
+      pr: "#99",
+      date: "2026-10-01",
+      reviewer: "carol",
+    };
+    const shown = selectPromptCandidates([...changelog, hit], {
+      review_comments: [
+        "Please add a changelog entry for this public API.",
+        "Please keep review comments short — don't paste an entire function.",
+      ],
+      reviewer_comments: [
+        { body: "Please add a changelog entry for this public API.", path: "docs/changelog.md" },
+        { body: "Please keep review comments short — don't paste an entire function.", path: "src/review.ts" },
+      ],
+    });
+    expect(shown.length).toBeLessThanOrEqual(CANDIDATE_PROMPT_K);
+    expect(shown.some((candidate) => candidate.id === hit.id)).toBe(true);
   });
 });
 
@@ -1406,6 +1483,33 @@ describe("recurrence promotion", () => {
       title: "Short comments",
       body: styleCommentAgain,
       reasoning: "matched carol",
+    }, [], ctx, "/tmp/project", 90, [], false, existing);
+    expect(parseMemory(planned.mutations[0]?.content ?? "")?.frontmatter.author).toBe("carol");
+  });
+
+  it("keeps a current comment reviewer when 2+ comments do not match", () => {
+    const existing = [{
+      id: styleId,
+      gist: normalizeGist(styleComment),
+      terms: ["keep", "short", "paste"],
+      files: [],
+      pr: "#10",
+      date: "2026-10-01",
+      reviewer: "bob",
+    }];
+    const ctx = styleContext("22", {
+      reviewer_comments: [
+        { body: "Please add a changelog entry for this public API.", author: "dave" },
+        { body: "The screenshot belongs in the docs folder.", author: "carol" },
+      ],
+    });
+    expect(matchingReviewer(ctx, existing[0], "Register retries only in the gateway wrapper.")).toBe("carol");
+    const planned = planLearnOutcomes({
+      action: "promote",
+      candidate_id: styleId,
+      title: "Gateway retries",
+      body: "Register retries only in the gateway wrapper.",
+      reasoning: "no comment match",
     }, [], ctx, "/tmp/project", 90, [], false, existing);
     expect(parseMemory(planned.mutations[0]?.content ?? "")?.frontmatter.author).toBe("carol");
   });

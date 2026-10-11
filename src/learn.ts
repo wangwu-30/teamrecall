@@ -4,7 +4,15 @@ import {
   normalizeGist,
   packageFloor,
 } from "./candidates.js";
-import { CANDIDATE_PROMPT_K, CANDIDATE_PROMPT_PER_COMMENT, MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
+import {
+  CANDIDATE_PROMPT_FILES,
+  CANDIDATE_PROMPT_GUARANTEED,
+  CANDIDATE_PROMPT_K,
+  CANDIDATE_PROMPT_PER_COMMENT,
+  MAX_ACTIVE_MEMORIES,
+  MAX_LEARN_PER_PR,
+  PROMPT_CONTEXT_CHARS,
+} from "./constants.js";
 import { bm25Scores, tokenize } from "./retrieve.js";
 import {
   clampBody,
@@ -110,8 +118,10 @@ export function selectPromptCandidates(
     : input.review_comments.map((body) => ({ body, path: undefined as string | undefined })));
   const queries = comments.length > 0 ? comments : [{ body: [input.title, input.body].filter(Boolean).join(" "), path: undefined }];
   const docs = open.map((candidate) => tokenize(`${candidate.gist} ${candidate.terms.join(" ")}`));
-  const best = new Map<string, { candidate: ReviewCandidate; score: number }>();
   const perComment = Math.min(CANDIDATE_PROMPT_PER_COMMENT, k);
+  const guaranteed = Math.min(CANDIDATE_PROMPT_GUARANTEED, k);
+  const perCommentRanked: Array<Array<{ candidate: ReviewCandidate; score: number }>> = [];
+  const best = new Map<string, { candidate: ReviewCandidate; score: number }>();
   for (const comment of queries) {
     const query = tokenize(comment.body);
     const commentFiles = comment.path ? [comment.path] : (input.files ?? []);
@@ -121,17 +131,84 @@ export function selectPromptCandidates(
         candidate,
         score: (raw[index] ?? 0) + pathProximity(commentFiles, candidate.files) * 2,
       }))
-      .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
-      .slice(0, perComment);
+      .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id));
+    perCommentRanked.push(ranked.slice(0, perComment));
     for (const item of ranked) {
       const prev = best.get(item.candidate.id);
       if (!prev || item.score > prev.score) best.set(item.candidate.id, item);
     }
   }
-  return [...best.values()]
+  const selected = new Map<string, { candidate: ReviewCandidate; score: number }>();
+  for (let slot = 0; slot < guaranteed; slot++) {
+    for (const ranked of perCommentRanked) {
+      const item = ranked[slot];
+      if (!item) continue;
+      if (!selected.has(item.candidate.id)) selected.set(item.candidate.id, item);
+      if (selected.size >= k) {
+        return [...selected.values()]
+          .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
+          .map((item) => item.candidate);
+      }
+    }
+  }
+  const remaining = [...best.values()]
+    .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id));
+  for (const item of remaining) {
+    if (selected.has(item.candidate.id)) continue;
+    selected.set(item.candidate.id, item);
+    if (selected.size >= k) break;
+  }
+  return [...selected.values()]
     .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
     .slice(0, k)
     .map((item) => item.candidate);
+}
+
+export function formatPromptCandidate(candidate: ReviewCandidate): string {
+  const files = candidate.files.slice(0, CANDIDATE_PROMPT_FILES);
+  const extra = candidate.files.length > CANDIDATE_PROMPT_FILES
+    ? ` +${candidate.files.length - CANDIDATE_PROMPT_FILES}`
+    : "";
+  const fileList = files.length > 0 ? `${files.join(", ")}${extra}` : "—";
+  return `- ${candidate.id}: ${candidate.gist} (from ${candidate.pr}; files: ${fileList})`;
+}
+
+export function capPromptContext(
+  prBody: string,
+  comments: string[],
+  budget = PROMPT_CONTEXT_CHARS,
+): { body: string; comments: string } {
+  const bodyText = prBody.trim() ? prBody : "(empty)";
+  if (comments.length === 0) {
+    return { body: truncateHead(bodyText, budget), comments: "(none)" };
+  }
+  const bodyCap = Math.floor(budget * 0.4);
+  const body = truncateHead(bodyText, bodyCap);
+  const commentBudget = Math.max(0, budget - body.length);
+  return { body, comments: capCommentHeads(comments, commentBudget) };
+}
+
+function truncateHead(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const keep = Math.max(0, max - 16);
+  return `${text.slice(0, keep)}\n...(truncated)`;
+}
+
+function capCommentHeads(comments: string[], budget: number): string {
+  const sep = "\n\n---\n\n";
+  const overhead = sep.length * Math.max(0, comments.length - 1);
+  let per = Math.floor(Math.max(0, budget - overhead) / Math.max(comments.length, 1));
+  per = Math.max(40, per);
+  const render = (width: number) => comments.map((comment) => truncateHead(comment, width)).join(sep);
+  let out = render(per);
+  while (out.length > budget && per > 40) {
+    per = Math.max(40, Math.floor(per * 0.75));
+    const next = render(per);
+    if (next.length >= out.length) break;
+    out = next;
+  }
+  if (out.length > budget) return truncateHead(out, budget);
+  return out;
 }
 
 export function generateDistillationPrompt(input: LearnInput): string {
@@ -145,8 +222,9 @@ export function generateDistillationPrompt(input: LearnInput): string {
     title: input.title,
     body: input.pr_body,
   })
-    .map((candidate) => `- ${candidate.id}: ${candidate.gist} (from ${candidate.pr}; files: ${candidate.files.join(", ") || "—"})`)
+    .map((candidate) => formatPromptCandidate(candidate))
     .join("\n");
+  const context = capPromptContext(input.pr_body, input.review_comments);
 
   return `You are reviewing a closed pull request to extract reusable engineering knowledge for the team.
 This PR may be merged or closed without merging. Human review comments are valid evidence either way.
@@ -154,10 +232,10 @@ This PR may be merged or closed without merging. Human review comments are valid
 PR #${input.pr_number}
 
 ## PR Description
-${input.pr_body || "(empty)"}
+${context.body}
 
 ## Review Comments
-${input.review_comments.length > 0 ? input.review_comments.join("\n\n---\n\n") : "(none)"}
+${context.comments}
 
 ## Commit Messages
 ${input.commit_messages.join("\n") || "(none)"}
@@ -582,7 +660,7 @@ export function matchingReviewer(
       });
     if (hit) return hit.author;
   }
-  if (comments.length === 1) return comments[0]!.author;
+  if (comments.length > 0) return comments[comments.length - 1]!.author;
   return matched?.reviewer
     || context.author
     || "teamrecall";
