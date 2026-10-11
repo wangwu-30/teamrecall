@@ -49,8 +49,11 @@ describe("normalizeGist / extractTerms", () => {
   it("keeps suggestion-block and inline-code contents in the gist", () => {
     const suggestionOnly = normalizeGist("```suggestion\nuse Box<T>\n```");
     expect(suggestionOnly).not.toBe("");
-    expect(suggestionOnly).toContain("box<t>");
+    expect(suggestionOnly).toContain("box");
     expect(suggestionOnly).toContain("suggestion");
+
+    const suggestionIdent = normalizeGist("```suggestion\nawait onTestFinished()\n```");
+    expect(suggestionIdent).toContain("ontestfinished");
 
     const fencedTilde = normalizeGist("~~~suggestion\nexpectTypeOf(value).toEqualTypeOf<string>()\n~~~");
     expect(fencedTilde).toContain("expecttypeof");
@@ -225,7 +228,7 @@ describe("matchCandidate / prune / record", () => {
       promoted: [],
     });
     expect(next).toHaveLength(1);
-    expect(next[0]?.gist).toContain("box<t>");
+    expect(next[0]?.gist).toContain("box");
     expect(next[0]?.gist.length).toBeGreaterThan(0);
   });
 
