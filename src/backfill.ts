@@ -109,6 +109,7 @@ export async function backfillProject(
         diff: "",
         review_comments: [],
         human_review_comments: [],
+        reviewer_comments: [],
         merged: true,
         commit_messages: [],
         commits: [],

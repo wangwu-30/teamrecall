@@ -2,105 +2,148 @@ import { describe, expect, it } from "vitest";
 import {
   candidatesOverlap,
   extractTerms,
+  generateCandidateId,
+  isPromotableQuality,
   matchCandidate,
   normalizeGist,
   pruneCandidates,
   recordCandidates,
 } from "./candidates.js";
+import { isEligibleReviewerComment, reviewerComments } from "./human-comments.js";
 import type { ReviewCandidate } from "./types.js";
 
-function candidate(partial: Partial<ReviewCandidate> & { id: string; gist: string }): ReviewCandidate {
+function candidate(partial: Partial<ReviewCandidate> & { gist: string }): ReviewCandidate {
+  const reviewer = partial.reviewer ?? "bob";
+  const pr = partial.pr ?? "#1";
+  const gist = normalizeGist(partial.gist);
   return {
+    id: partial.id ?? generateCandidateId(gist, pr, reviewer),
     terms: extractTerms(partial.gist),
     files: [],
-    pr: "#1",
     date: "2026-10-01",
+    reviewer,
+    pr,
     ...partial,
+    gist,
   };
 }
 
 describe("normalizeGist / extractTerms", () => {
-  it("collapses a review comment into a stable gist and terms", () => {
-    const gist = normalizeGist("Keep review comments short. Don't paste a whole function into a PR comment.");
+  it("strips URLs, @names, and stays at most 120 chars", () => {
+    const gist = normalizeGist("Keep review comments short. See https://github.com/acme/app/pull/12 @alice.");
     expect(gist).toContain("keep review comments short");
-    expect(extractTerms(gist)).toEqual(expect.arrayContaining(["keep", "review", "comments", "short", "paste", "function"]));
+    expect(gist).not.toContain("https");
+    expect(gist).not.toContain("alice");
+    expect(gist.length).toBeLessThanOrEqual(120);
+    expect(extractTerms("See https://github.com/acme/app/pull/12")).not.toEqual(
+      expect.arrayContaining(["https", "github", "com", "pull"]),
+    );
   });
 });
 
 describe("candidatesOverlap", () => {
-  it("matches a keep-comments-short style recurrence", () => {
+  it("does not match on top-level packages/ or two generic terms", () => {
     const first = {
-      gist: normalizeGist("Keep review comments short. Do not paste a whole function into a PR comment."),
-      terms: extractTerms("Keep review comments short. Do not paste a whole function into a PR comment."),
-      files: [],
+      gist: normalizeGist("Please add a changelog entry for this public API."),
+      terms: extractTerms("Please add a changelog entry for this public API."),
+      files: ["packages/vitest/src/node/cli.ts"],
     };
     const second = {
-      gist: normalizeGist("Please keep review comments short — don't paste an entire function into the PR comment."),
-      terms: extractTerms("Please keep review comments short — don't paste an entire function into the PR comment."),
-      files: [],
-    };
-    expect(candidatesOverlap(first, second).match).toBe(true);
-  });
-
-  it("does not match unrelated comments", () => {
-    const first = {
-      gist: normalizeGist("Keep review comments short."),
-      terms: extractTerms("Keep review comments short. Do not paste a whole function into a PR comment."),
-      files: [],
-    };
-    const second = {
-      gist: normalizeGist("Register retries only in the gateway wrapper."),
-      terms: extractTerms("Register retries only in the gateway wrapper so callers see one policy."),
-      files: ["src/gateway.ts"],
+      gist: normalizeGist("Please export the helper from the package index."),
+      terms: extractTerms("Please export the helper from the package index."),
+      files: ["packages/browser/src/client.ts"],
     };
     expect(candidatesOverlap(first, second).match).toBe(false);
+  });
+
+  it("matches only with the same package floor or same file and 3 distinctive terms", () => {
+    const first = {
+      gist: normalizeGist("Register retries only in the gateway wrapper."),
+      terms: extractTerms("Register retries only in the gateway wrapper so callers see one policy."),
+      files: ["src/gateway/retry.ts"],
+    };
+    const second = {
+      gist: normalizeGist("Register retries only in the gateway wrapper, never in services."),
+      terms: extractTerms("Register retries only in the gateway wrapper never in the service layer."),
+      files: ["src/gateway/client.ts"],
+    };
+    expect(candidatesOverlap(first, second, [first, second]).match).toBe(true);
+  });
+});
+
+describe("reviewer filters", () => {
+  it("drops author replies, URL-only, thanks, closing, and AI-disclosure comments", () => {
+    const comments = reviewerComments([
+      { body: "Keep review comments short. Do not paste a whole function into a PR comment.", author: "bob" },
+      { body: "I'll fix this in a follow-up.", author: "alice" },
+      { body: "https://github.com/acme/app/pull/12", author: "carol" },
+      { body: "Thanks!", author: "dave" },
+      { body: "Closing this for now.", author: "erin" },
+      { body: "I'm a real person and used ChatGPT to write this.", author: "frank" },
+      { body: "Please use httpOnly cookies.", author: "bob", in_reply_to: 99 },
+    ], "alice");
+    expect(comments).toEqual([{
+      body: "Keep review comments short. Do not paste a whole function into a PR comment.",
+      author: "bob",
+    }]);
+    expect(isEligibleReviewerComment({ body: "https://example.com/a", author: "bob" }, "alice")).toBe(false);
   });
 });
 
 describe("matchCandidate / prune / record", () => {
-  it("skips the same PR and promoted candidates", () => {
-    const open = candidate({
-      id: "C-001",
-      gist: normalizeGist("Keep review comments short. Do not paste a whole function into a PR comment."),
-      pr: "#10",
-    });
-    const promoted = { ...open, id: "C-002", promoted_to: "M-001" };
-    expect(matchCandidate(open.gist, [], [open], "10")).toBeUndefined();
-    expect(matchCandidate(open.gist, [], [promoted], "22")).toBeUndefined();
-    expect(matchCandidate(
-      "Please keep review comments short and do not paste a whole function.",
-      [],
-      [open],
-      "22",
-    )?.id).toBe("C-001");
-  });
-
-  it("drops expired and promoted candidates and caps the rest", () => {
-    const kept = candidate({ id: "C-002", gist: "newer", date: "2026-09-01" });
+  it("keeps promoted candidates and expires only by time", () => {
+    const kept = candidate({ gist: "newer rule about retries in the gateway wrapper", date: "2026-09-01", reviewer: "bob" });
+    const promoted = { ...kept, id: generateCandidateId("old", "#2", "bob"), gist: "old", promoted_to: "M-001", date: "2026-09-01" };
     const pruned = pruneCandidates([
-      candidate({ id: "C-001", gist: "old", date: "2026-01-01" }),
-      { ...kept, promoted_to: "M-001" },
+      candidate({ gist: "expired", date: "2026-01-01", reviewer: "bob" }),
+      promoted,
       kept,
-    ], { now: "2026-10-11", ttlDays: 180, cap: 1 });
-    expect(pruned.map((item) => item.id)).toEqual(["C-002"]);
+    ], { now: "2026-10-11", ttlDays: 180, cap: 2000 });
+    expect(pruned.map((item) => item.id)).toEqual(expect.arrayContaining([kept.id, promoted.id]));
+    expect(pruned.some((item) => item.gist === "expired")).toBe(false);
   });
 
-  it("records a new candidate and marks a promotion", () => {
+  it("records a hash id and keeps promoted_to after promotion", () => {
     const existing = [candidate({
-      id: "C-001",
-      gist: normalizeGist("Keep review comments short. Do not paste a whole function into a PR comment."),
+      gist: "Keep review comments short. Do not paste a whole function into a PR comment.",
       pr: "#10",
+      reviewer: "bob",
     })];
-    const next = recordCandidates(existing, [
-      "Please keep review comments short — don't paste an entire function into the PR comment.",
-    ], {
+    const next = recordCandidates(existing, [{
+      body: "Please keep review comments short — don't paste an entire function into the PR comment.",
+      author: "carol",
+    }], {
       pr: "22",
       files: [],
       date: "2026-10-11",
-      promoted: [{ candidate_id: "C-001", memory_id: "M-001" }],
+      promoted: [{ candidate_id: existing[0]!.id, memory_id: "M-001" }],
     });
-    expect(next.some((item) => item.id === "C-001")).toBe(false);
-    expect(next.every((item) => !item.promoted_to)).toBe(true);
-    expect(next.some((item) => candidatesOverlap(item, existing[0]!).match)).toBe(false);
+    expect(next.find((item) => item.id === existing[0]!.id)?.promoted_to).toBe("M-001");
+    expect(next.some((item) => item.pr === "#22")).toBe(true);
+    expect(existing[0]!.id).toMatch(/^C-[a-f0-9]{12}$/);
+    expect(generateCandidateId("a", "#1", "bob")).not.toBe(generateCandidateId("b", "#1", "bob"));
+  });
+
+  it("does not deterministically match two unrelated packages comments", () => {
+    const open = candidate({
+      gist: "Please add a changelog entry for this public API.",
+      files: ["packages/vitest/src/node/cli.ts"],
+      pr: "#10",
+      reviewer: "bob",
+    });
+    expect(matchCandidate(
+      "Please export the helper from the package index.",
+      ["packages/browser/src/client.ts"],
+      [open],
+      "22",
+    )).toBeUndefined();
+  });
+});
+
+describe("isPromotableQuality", () => {
+  it("accepts imperative rules and rejects questions or status notes", () => {
+    expect(isPromotableQuality("Keep review comments short. Do not paste a whole function into a PR comment.")).toBe(true);
+    expect(isPromotableQuality("Can we move this helper?")).toBe(false);
+    expect(isPromotableQuality("Updated.")).toBe(false);
   });
 });

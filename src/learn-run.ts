@@ -18,6 +18,7 @@ import {
   recordCandidates,
   writeCandidates,
 } from "./candidates.js";
+import { hydrateCandidates } from "./state-branch.js";
 import {
   buildLearnPrBody,
   buildLearnPrTitle,
@@ -181,7 +182,9 @@ export async function runLearn(input: {
 
   const memories = await loadMemories(projectDir);
   const config = await loadConfig(projectDir);
-  const reviewCandidates = await loadCandidates(projectDir);
+  const reviewCandidates = input.ci
+    ? await hydrateCandidates(projectDir, true)
+    : await loadCandidates(projectDir);
   const experimentalPaths = Boolean(input.experimentalPaths || config.experimental?.retrieval);
   const prompt = generateDistillationPrompt({
     pr_number: context.number,
@@ -220,16 +223,15 @@ export async function runLearn(input: {
   }
 
   const trackedFiles = await listRepoFiles(projectDir);
-  outcome = maybePromoteFromCandidates(outcome, reviewCandidates, context);
+  outcome = maybePromoteFromCandidates(outcome, reviewCandidates, context, {
+    deterministic: distiller === "deterministic",
+  });
   const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths, reviewCandidates);
   plan.distiller = distiller;
   plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);
 
-  const comments = context.human_review_comments.length > 0
-    ? context.human_review_comments
-    : context.review_comments;
-  const nextCandidates = recordCandidates(reviewCandidates, comments, {
+  const nextCandidates = recordCandidates(reviewCandidates, context.reviewer_comments ?? [], {
     pr: context.number,
     url: context.url,
     files: context.evidence_files.length > 0 ? context.evidence_files : context.files,
@@ -242,7 +244,7 @@ export async function runLearn(input: {
   const before = JSON.stringify(reviewCandidates);
   const after = JSON.stringify(nextCandidates);
   if (before !== after) {
-    written.push(await writeCandidates(projectDir, nextCandidates));
+    await writeCandidates(projectDir, nextCandidates);
     plan.candidates_recorded = nextCandidates.filter((candidate) => (
       !reviewCandidates.some((existing) => existing.id === candidate.id)
     )).length;
@@ -253,7 +255,7 @@ export async function runLearn(input: {
   written.push(...await writeCompiledFiles(projectDir, compiled));
 
   let prUrl: string | null | undefined;
-  if (input.openPr && (plan.mutations.length > 0 || deleted.length > 0 || before !== after)) {
+  if (input.openPr && (plan.mutations.length > 0 || deleted.length > 0)) {
     const opener = input.deps?.openPr ?? openPullRequest;
     prUrl = await opener({
       cwd: projectDir,

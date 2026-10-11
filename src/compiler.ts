@@ -3,6 +3,8 @@ import * as path from "node:path";
 import {
   AGENTS_INDEX_MAX_LINES,
   CLAUDE_INDEX_IMPORT,
+  COMPILE_ALWAYS_CAP,
+  COMPILE_TRIGGERED_CAP,
   MAX_ACTIVE_MEMORIES,
   TEAMRECALL_END,
   TEAMRECALL_START,
@@ -16,19 +18,28 @@ export async function compileMemories(
   _projectDir: string,
   memories: Memory[],
 ): Promise<CompiledOutput> {
-  const activeMemories = memories
+  const catalog = memories
     .filter((memory) => memory.frontmatter.status === "active")
     .slice(0, MAX_ACTIVE_MEMORIES);
   const abandonedMemories = memories.filter((memory) => memory.frontmatter.status === "abandoned");
-  const compact = generateCompactIndex(activeMemories, abandonedMemories);
+  const injected = selectInjectedMemories(catalog);
+  const compact = generateCompactIndex(injected, abandonedMemories);
 
   return {
     agents_md: compact,
-    index_md: generateIndexMd(activeMemories, abandonedMemories),
+    index_md: generateIndexMd(catalog, abandonedMemories),
     compact_index: compact,
-    claude_rules: generateClaudeRules(activeMemories),
-    cursor_rules: generateCursorRules(activeMemories),
+    claude_rules: generateClaudeRules(injected),
+    cursor_rules: generateCursorRules(injected),
   };
+}
+
+export function selectInjectedMemories(active: Memory[]): Memory[] {
+  const always = active.filter((memory) => memory.frontmatter.scope === "always").slice(0, COMPILE_ALWAYS_CAP);
+  const triggered = active
+    .filter((memory) => memory.frontmatter.scope !== "always")
+    .slice(0, COMPILE_TRIGGERED_CAP);
+  return [...always, ...triggered];
 }
 
 function generateIndexMd(active: Memory[], abandoned: Memory[]): string {
@@ -120,7 +131,7 @@ export function generateCompactIndex(active: Memory[], abandoned: Memory[] = [])
 }
 
 export function generateAgentsMdBlock(memories: Memory[]): string {
-  const active = memories.filter((memory) => memory.frontmatter.status === "active");
+  const active = selectInjectedMemories(memories.filter((memory) => memory.frontmatter.status === "active"));
   const abandoned = memories.filter((memory) => memory.frontmatter.status === "abandoned");
   return generateCompactIndex(active, abandoned);
 }

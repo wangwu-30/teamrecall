@@ -199,7 +199,28 @@ describe("compileMemories", () => {
     );
     const block = generateAgentsMdBlock(memories);
     expect(block.split("\n").length).toBeLessThanOrEqual(AGENTS_INDEX_MAX_LINES);
-    expect(block).toContain("more");
+  });
+
+  it("injects at most 10 triggered memories plus always-scope ones", async () => {
+    const memories = [
+      ...Array.from({ length: 3 }, (_, index) => memory({
+        id: `M-00${index + 1}`,
+        scope: "always",
+        body: `Always rule ${index + 1}`,
+      })),
+      ...Array.from({ length: 15 }, (_, index) => memory({
+        id: `M-${String(index + 10).padStart(3, "0")}`,
+        scope: "triggered",
+        body: `Triggered rule ${index + 1}`,
+      })),
+    ];
+    const compiled = await compileMemories("/tmp", memories);
+    expect(compiled.claude_rules.size).toBe(13);
+    expect(compiled.cursor_rules.size).toBe(13);
+    expect(compiled.agents_md).toContain("M-001");
+    expect(compiled.agents_md).toContain("M-010");
+    expect(compiled.agents_md).not.toContain("M-020");
+    expect(compiled.index_md).toContain("M-020");
   });
 });
 

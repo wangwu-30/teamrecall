@@ -20,6 +20,7 @@ export interface MemoryFrontmatter {
   evidence: {
     pr?: string;
     prs?: string[];
+    reviewers?: string[];
     review_url?: string;
     commits?: string[];
   };
@@ -72,6 +73,7 @@ export interface ReviewCandidate {
   pr: string;
   url?: string;
   date: string;
+  reviewer: string;
   promoted_to?: string;
 }
 
@@ -93,6 +95,7 @@ export interface PullRequestContext {
   merged: boolean;
   review_comments: string[];
   human_review_comments: string[];
+  reviewer_comments: Array<{ body: string; author: string; path?: string }>;
   commit_messages: string[];
   commits: string[];
   files: string[];

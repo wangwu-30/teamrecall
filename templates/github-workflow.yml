@@ -87,8 +87,36 @@ jobs:
             echo "TEAMRECALL_BIN=npx -y github:wangwu-30/teamrecall#${TEAMRECALL_REF}" >> "$GITHUB_ENV"
           fi
 
+      - name: Load candidate state
+        run: |
+          set -euo pipefail
+          mkdir -p .memory
+          git fetch origin teamrecall/state:teamrecall/state || true
+          git show teamrecall/state:.memory/candidates.jsonl > .memory/candidates.jsonl 2>/dev/null || true
+
       - name: Learn from closed PR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: $TEAMRECALL_BIN learn ${{ github.event.pull_request.number }} --ci
+
+      - name: Persist candidate state
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f .memory/candidates.jsonl ]; then exit 0; fi
+          cp .memory/candidates.jsonl /tmp/teamrecall-candidates.jsonl
+          git fetch origin teamrecall/state:teamrecall/state || true
+          if git rev-parse --verify teamrecall/state >/dev/null 2>&1; then
+            git checkout --force teamrecall/state
+          else
+            git checkout --orphan teamrecall/state
+            git rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
+          fi
+          mkdir -p .memory
+          cp /tmp/teamrecall-candidates.jsonl .memory/candidates.jsonl
+          git add .memory/candidates.jsonl
+          if git diff --cached --quiet; then exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "teamrecall: update review candidates"
+          git push origin teamrecall/state

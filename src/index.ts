@@ -3,19 +3,25 @@ export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, list
 export {
   candidatesOverlap,
   extractTerms,
+  generateCandidateId,
+  isPromotableQuality,
   loadCandidates,
   matchCandidate,
   normalizeGist,
   pruneCandidates,
   recordCandidates,
+  toImperativeBody,
 } from "./candidates.js";
 export {
   AGENTS_INDEX_MAX_LINES,
   CANDIDATE_CAP,
   CANDIDATE_TTL_DAYS,
   CLAUDE_INDEX_IMPORT,
+  COMPILE_ALWAYS_CAP,
+  COMPILE_TRIGGERED_CAP,
   MAX_ACTIVE_MEMORIES,
   MAX_BODY_WORDS,
+  STATE_BRANCH,
   TEAMRECALL_END,
   TEAMRECALL_START,
 } from "./constants.js";
@@ -60,7 +66,7 @@ export {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
-export { humanCommentBodies, isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
+export { humanCommentBodies, isBotAuthor, isEligibleReviewerComment, reviewerComments, shouldLearnFromClosedPr } from "./human-comments.js";
 export { AUTHORED_COMMENT_JQ, GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, authoredCommentApiArgs, createOrReusePullRequest, evidenceFilesFromComments, getDefaultBranch, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
 export {
   clampBody,

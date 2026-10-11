@@ -1,8 +1,8 @@
 import * as path from "node:path";
 import {
-  extractTerms,
-  isProcessStyle,
+  isPromotableQuality,
   matchCandidate,
+  toImperativeBody,
 } from "./candidates.js";
 import { MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
 import {
@@ -215,7 +215,7 @@ export function hydrateCandidateId(outcome: LearnOutcome): LearnOutcome {
 
 export function applyCandidateDecision(outcome: LearnOutcome, candidates: ReviewCandidate[]): LearnOutcome {
   hydrateCandidateId(outcome);
-  if (outcome.candidate_id && candidates.some((candidate) => candidate.id === outcome.candidate_id && !candidate.promoted_to)) {
+  if (outcome.candidate_id && candidates.some((candidate) => candidate.id === outcome.candidate_id)) {
     outcome.action = "promote";
   }
   for (const child of outcome.memories ?? []) applyCandidateDecision(child, candidates);
@@ -226,14 +226,18 @@ export function maybePromoteFromCandidates(
   outcome: LearnOutcome,
   candidates: ReviewCandidate[],
   context: PullRequestContext,
+  options?: { deterministic?: boolean },
 ): LearnOutcome {
   applyCandidateDecision(outcome, candidates);
   if (outcome.action !== "no_op") return outcome;
-  const files = evidenceFiles(context);
-  for (const comment of context.human_review_comments.length > 0 ? context.human_review_comments : context.review_comments) {
-    const matched = matchCandidate(comment, files, candidates, context.number);
+  if (options?.deterministic) return outcome;
+  const comments = context.reviewer_comments ?? [];
+  for (const comment of comments) {
+    if (!isPromotableQuality(comment.body)) continue;
+    const files = comment.path ? [comment.path] : evidenceFiles(context);
+    const matched = matchCandidate(comment.body, files, candidates, context.number);
     if (!matched) continue;
-    const body = clampBody(comment.replace(/\s+/g, " "));
+    const body = clampBody(toImperativeBody(comment.body));
     return {
       action: "promote",
       candidate_id: matched.id,
@@ -258,18 +262,23 @@ export function distinctEvidencePrs(...values: Array<string | string[] | undefin
   return unique(found);
 }
 
-export function allowAlways(pathsSource: PathsSource | undefined, prs: string[]): boolean {
+export function allowAlways(
+  pathsSource: PathsSource | undefined,
+  prs: string[],
+  reviewers: string[] = [],
+): boolean {
   if (pathsSource === "human") return true;
-  return prs.length >= 2;
+  return prs.length >= 2 && unique(reviewers).length >= 2;
 }
 
 export function gateAlwaysScope(
   requested: MemoryScope,
   pathsSource: PathsSource | undefined,
   prs: string[],
+  reviewers: string[] = [],
 ): { scope: MemoryScope; downgraded: boolean } {
   if (requested !== "always") return { scope: requested, downgraded: false };
-  if (allowAlways(pathsSource, prs)) return { scope: "always", downgraded: false };
+  if (allowAlways(pathsSource, prs, reviewers)) return { scope: "always", downgraded: false };
   return { scope: "triggered", downgraded: true };
 }
 
@@ -403,7 +412,7 @@ function planOne(
 
   if (outcome.action === "new" || outcome.action === "promote") {
     const matched = outcome.action === "promote"
-      ? reviewCandidates.find((candidate) => candidate.id === outcome.candidate_id && !candidate.promoted_to)
+      ? reviewCandidates.find((candidate) => candidate.id === outcome.candidate_id)
       : undefined;
     if (outcome.action === "promote" && !matched) {
       return {
@@ -415,9 +424,30 @@ function planOne(
         usedIds: [],
       };
     }
+    const qualityText = outcome.body || matched?.gist || "";
+    if (outcome.action === "promote" && !isPromotableQuality(qualityText) && !isPromotableQuality(matched?.gist ?? "")) {
+      return {
+        outcome: { ...outcome, action: "no_op", reasoning: "Candidate failed the imperative quality gate" },
+        mutations: [],
+        learned: 0,
+        updated: 0,
+        retired: 0,
+        usedIds: [],
+      };
+    }
+    if (matched?.promoted_to) {
+      const target = existing.find((memory) => memory.frontmatter.id === matched.promoted_to);
+      if (target) {
+        return planUpdate(outcome, target, context, created, evidence, ttlDays, trackedFiles, experimentalPaths, {
+          extraPr: matched.pr,
+          extraReviewer: matched.reviewer,
+        });
+      }
+    }
+    const reviewer = currentReviewer(context, matched);
     const id = generateMemoryId(usedIds);
     const title = outcome.title || firstLine(outcome.body || matched?.gist || "Untitled lesson");
-    const body = clampBody(outcome.body || title);
+    const body = clampBody(toImperativeBody(outcome.body || title) || title);
     const inferFiles = unique([
       ...(matched?.files ?? []),
       ...context.files,
@@ -430,8 +460,9 @@ function planOne(
       };
     const paths = resolved.paths;
     const prs = distinctEvidencePrs(matched?.pr, `#${context.number}`);
+    const reviewers = unique([matched?.reviewer, reviewer]);
     const requested = outcome.scope ?? defaultScope(paths, body);
-    const gated = gateAlwaysScope(requested, resolved.source, prs);
+    const gated = gateAlwaysScope(requested, resolved.source, prs, reviewers);
     const frontmatter: MemoryFrontmatter = {
       id,
       kind: (outcome.kind as MemoryKind) || inferKind(body),
@@ -439,8 +470,8 @@ function planOne(
       paths_source: resolved.source,
       scope: gated.scope,
       ...(outcome.triggers && outcome.triggers.length > 0 ? { triggers: outcome.triggers } : {}),
-      evidence: { ...evidence, prs },
-      author: context.author || "teamrecall",
+      evidence: { ...evidence, prs, reviewers },
+      author: reviewer,
       created,
       review_after: reviewAfterDate(created, ttlDays),
       status: "active",
@@ -457,7 +488,7 @@ function planOne(
       retired: 0,
       usedIds: [id],
       scopeNote: gated.downgraded
-        ? `${id}: always → triggered (needs evidence from ≥2 distinct PRs unless human-authored; seen ${prs.join(", ")})`
+        ? `${id}: always → triggered (needs ≥2 distinct PRs and ≥2 distinct reviewers unless human-authored; seen ${prs.join(", ")} / ${reviewers.join(", ") || "—"})`
         : undefined,
     };
   }
@@ -493,6 +524,27 @@ function planOne(
     };
   }
 
+  return planUpdate(outcome, target, context, created, evidence, ttlDays, trackedFiles, experimentalPaths);
+}
+
+function currentReviewer(context: PullRequestContext, matched?: ReviewCandidate): string {
+  return context.reviewer_comments[0]?.author
+    || matched?.reviewer
+    || context.author
+    || "teamrecall";
+}
+
+function planUpdate(
+  outcome: LearnOutcome,
+  target: Memory,
+  context: PullRequestContext,
+  created: string,
+  evidence: { pr: string; review_url?: string; commits: string[] },
+  ttlDays: number,
+  trackedFiles: string[],
+  experimentalPaths: boolean,
+  extra?: { extraPr?: string; extraReviewer?: string },
+): { outcome: LearnOutcome; mutations: FileMutation[]; learned: number; updated: number; retired: number; usedIds: string[]; scopeNote?: string } {
   const resolved = outcome.paths && outcome.paths.length > 0
     ? (experimentalPaths
       ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
@@ -500,9 +552,14 @@ function planOne(
     : undefined;
   const paths = resolved?.paths ?? target.frontmatter.paths;
   const pathsSource = resolved?.source ?? target.frontmatter.paths_source ?? "human";
-  const prs = distinctEvidencePrs(target.frontmatter.evidence.prs, target.frontmatter.evidence.pr, `#${context.number}`);
+  const prs = distinctEvidencePrs(target.frontmatter.evidence.prs, target.frontmatter.evidence.pr, extra?.extraPr, `#${context.number}`);
+  const reviewers = unique([
+    ...(target.frontmatter.evidence.reviewers ?? []),
+    extra?.extraReviewer,
+    currentReviewer(context),
+  ]);
   const requested = outcome.scope ?? target.frontmatter.scope ?? defaultScope(paths, target.body);
-  const gated = gateAlwaysScope(requested, pathsSource, prs);
+  const gated = gateAlwaysScope(requested, pathsSource, prs, reviewers);
   const nextFrontmatter: MemoryFrontmatter = {
     ...target.frontmatter,
     paths,
@@ -513,6 +570,7 @@ function planOne(
       ...target.frontmatter.evidence,
       ...evidence,
       prs,
+      reviewers,
       commits: unique([
         ...(target.frontmatter.evidence.commits ?? []),
         ...evidence.commits,
@@ -520,16 +578,16 @@ function planOne(
     },
     review_after: reviewAfterDate(created, ttlDays),
   };
-  const body = clampBody(outcome.body || target.body);
+  const body = clampBody(toImperativeBody(outcome.body || target.body) || target.body);
   return {
-    outcome,
+    outcome: { ...outcome, action: outcome.action === "promote" ? "update" : outcome.action, memory_id: target.frontmatter.id },
     mutations: [{ path: target.filepath, content: formatMemory(nextFrontmatter, body) }],
     learned: 0,
     updated: 1,
     retired: 0,
     usedIds: [],
     scopeNote: gated.downgraded
-      ? `${target.frontmatter.id}: always → triggered (needs evidence from ≥2 distinct PRs unless human-authored; seen ${prs.join(", ")})`
+      ? `${target.frontmatter.id}: always → triggered (needs ≥2 distinct PRs and ≥2 distinct reviewers unless human-authored; seen ${prs.join(", ")} / ${reviewers.join(", ") || "—"})`
       : undefined,
   };
 }
@@ -617,11 +675,13 @@ function conflictSections(plan: LearnPlan): string[] {
 }
 
 export function fallbackOutcomeFromReviews(context: PullRequestContext): LearnOutcome {
-  const directive = context.review_comments.find((comment) => isDirective(comment));
+  const reviewerBodies = (context.reviewer_comments ?? []).map((comment) => comment.body);
+  const comments = reviewerBodies.length > 0 ? reviewerBodies : context.review_comments;
+  const directive = comments.find((comment) => isDirective(comment) && isPromotableQuality(comment));
   if (!directive) {
     return { action: "no_op", reasoning: "No reusable directive in review comments" };
   }
-  const body = clampBody(directive.replace(/\s+/g, " "));
+  const body = clampBody(toImperativeBody(directive) || directive.replace(/\s+/g, " "));
   return {
     action: "new",
     title: firstLine(body),
@@ -632,7 +692,7 @@ export function fallbackOutcomeFromReviews(context: PullRequestContext): LearnOu
 }
 
 function isDirective(text: string): boolean {
-  if (isProcessStyle(extractTerms(text))) return false;
+  if (/\b(review comments?|pr comments?|paste .{0,20}function)\b/i.test(text)) return false;
   return /\b(never|always|must|don't|do not|should only|retries?|convention|don't use)\b/i.test(text)
     && text.trim().length >= 40;
 }
@@ -847,8 +907,8 @@ function firstLine(body: string): string {
   return body.trim().split("\n")[0] || "";
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
+function unique(values: Array<string | undefined | null>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
 function levenshteinDistance(a: string, b: string): number {

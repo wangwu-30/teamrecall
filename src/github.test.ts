@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  AUTHORED_COMMENT_JQ,
   GIT_AUTHOR_NAME,
   MANAGED_GIT_PATHS,
   authoredCommentApiArgs,
@@ -49,6 +50,19 @@ describe("git identity and staging", () => {
     const args = authoredCommentApiArgs("repos/{owner}/{repo}/pulls/1/comments");
     expect(args).toContain("--paginate");
     expect(args[0]).toBe("api");
+    expect(AUTHORED_COMMENT_JQ).toContain("in_reply_to");
+  });
+
+  it("does not stage .memory/candidates.jsonl onto a memory PR", async () => {
+    const dir = await gitRepo();
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    await fs.writeFile(path.join(dir, ".memory", "memories", "M-001.md"), "memory\n", "utf8");
+    await fs.writeFile(path.join(dir, ".memory", "candidates.jsonl"), '{"id":"C-aaaaaaaaaaaa"}\n', "utf8");
+    const dirty = await stageManagedChanges(dir);
+    expect(dirty).toBe(true);
+    const { stdout } = await exec("git", ["diff", "--cached", "--name-only"], { cwd: dir });
+    expect(stdout).toContain(".memory/memories/M-001.md");
+    expect(stdout).not.toContain("candidates.jsonl");
   });
 
   it("includes teamrecall workflow files in the managed commit", () => {

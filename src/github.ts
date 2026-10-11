@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import * as path from "node:path";
 import { exists } from "./utils/atomic.js";
 import { getCurrentBranch, gitHasRemote } from "./utils/git.js";
-import { humanCommentBodies, isBotAuthor, type AuthoredComment } from "./human-comments.js";
+import { humanCommentBodies, isBotAuthor, reviewerComments, type AuthoredComment } from "./human-comments.js";
 import type { PullRequestContext } from "./types.js";
 
 const exec = promisify(execFile);
@@ -52,7 +52,10 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
 
   const authored = await fetchAuthoredComments(pr, cwd);
   const human_review_comments = humanCommentBodies(authored);
-  const evidence_files = evidenceFilesFromComments(authored);
+  const reviewer_comments = reviewerComments(authored, view.author?.login ?? "");
+  const evidence_files = evidenceFilesFromComments(authored.filter((comment) => (
+    reviewer_comments.some((item) => item.body === comment.body && item.author === comment.author)
+  )));
   const merged = Boolean(view.mergedAt) || view.state === "MERGED";
   const review_comments = merged
     ? unique(authored.map((comment) => comment.body.trim()).filter(Boolean))
@@ -72,6 +75,7 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
     merged,
     review_comments,
     human_review_comments,
+    reviewer_comments,
     commit_messages,
     commits,
     files: (view.files ?? []).map((file) => file.path).filter((item): item is string => Boolean(item)),
@@ -88,7 +92,7 @@ export function evidenceFilesFromComments(comments: AuthoredComment[]): string[]
 }
 
 export const AUTHORED_COMMENT_JQ =
-  ".[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type, path: .path}";
+  ".[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type, path: .path, in_reply_to: .in_reply_to_id}";
 
 export function authoredCommentApiArgs(endpoint: string): string[] {
   return ["api", "--paginate", endpoint, "--jq", AUTHORED_COMMENT_JQ];
@@ -285,6 +289,11 @@ export async function stageManagedChanges(cwd: string): Promise<boolean> {
   const paths = await existingManagedPaths(cwd);
   if (paths.length === 0) return false;
   await run("git", ["add", "-A", "--", ...paths], cwd);
+  try {
+    await run("git", ["reset", "-q", "HEAD", "--", ".memory/candidates.jsonl"], cwd);
+  } catch {
+    // File may not be staged.
+  }
   try {
     await run("git", ["diff", "--cached", "--quiet", "--", ...paths], cwd);
     return false;
