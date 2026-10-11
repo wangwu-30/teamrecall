@@ -4,8 +4,17 @@ import {
   normalizeGist,
   packageFloor,
 } from "./candidates.js";
-import { CANDIDATE_PROMPT_K, CANDIDATE_PROMPT_PER_COMMENT, MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
-import { bm25Scores, tokenize } from "./retrieve.js";
+import {
+  CANDIDATE_PROMPT_FILES,
+  CANDIDATE_PROMPT_K,
+  CANDIDATE_PROMPT_PER_COMMENT,
+  MAX_ACTIVE_MEMORIES,
+  MAX_LEARN_PER_PR,
+  PROMPT_COMMITS_CHARS,
+  PROMPT_CONTEXT_CHARS,
+  PROMPT_MEMORY_K,
+} from "./constants.js";
+import { bm25ScoresFromIndex, buildBm25Index, tokenize } from "./retrieve.js";
 import {
   clampBody,
   formatMemory,
@@ -110,33 +119,146 @@ export function selectPromptCandidates(
     : input.review_comments.map((body) => ({ body, path: undefined as string | undefined })));
   const queries = comments.length > 0 ? comments : [{ body: [input.title, input.body].filter(Boolean).join(" "), path: undefined }];
   const docs = open.map((candidate) => tokenize(`${candidate.gist} ${candidate.terms.join(" ")}`));
-  const best = new Map<string, { candidate: ReviewCandidate; score: number }>();
+  const index = buildBm25Index(docs);
+  const meta = open.map((candidate) => ({
+    files: new Set(candidate.files),
+    dirs: new Set(candidate.files.map(parentDir).filter(Boolean)),
+    packages: new Set(candidate.files.map(packageFloor).filter(Boolean)),
+  }));
   const perComment = Math.min(CANDIDATE_PROMPT_PER_COMMENT, k);
+  const perCommentRanked: Array<Array<{ candidate: ReviewCandidate; score: number }>> = [];
   for (const comment of queries) {
-    const query = tokenize(comment.body);
+    const raw = bm25ScoresFromIndex(tokenize(comment.body), index);
     const commentFiles = comment.path ? [comment.path] : (input.files ?? []);
-    const raw = bm25Scores(query, docs);
     const ranked = open
-      .map((candidate, index) => ({
+      .map((candidate, docIndex) => ({
         candidate,
-        score: (raw[index] ?? 0) + pathProximity(commentFiles, candidate.files) * 2,
+        score: (raw[docIndex] ?? 0) + pathBoost(commentFiles, meta[docIndex]),
       }))
       .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
       .slice(0, perComment);
-    for (const item of ranked) {
-      const prev = best.get(item.candidate.id);
-      if (!prev || item.score > prev.score) best.set(item.candidate.id, item);
+    perCommentRanked.push(ranked);
+  }
+  const selected = new Map<string, { candidate: ReviewCandidate; score: number }>();
+  for (let slot = 0; slot < perComment; slot++) {
+    for (const ranked of perCommentRanked) {
+      const item = ranked[slot];
+      if (!item) continue;
+      const prev = selected.get(item.candidate.id);
+      if (!prev || item.score > prev.score) selected.set(item.candidate.id, item);
+      if (selected.size >= k) {
+        return [...selected.values()]
+          .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
+          .map((item) => item.candidate);
+      }
     }
   }
-  return [...best.values()]
+  return [...selected.values()]
     .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
     .slice(0, k)
     .map((item) => item.candidate);
 }
 
+function pathBoost(
+  commentFiles: string[],
+  meta?: { files: Set<string>; dirs: Set<string>; packages: Set<string> },
+): number {
+  if (!meta || commentFiles.length === 0) return 0;
+  if (commentFiles.some((file) => meta.files.has(file))) return 6;
+  if (commentFiles.map(parentDir).some((dir) => dir && meta.dirs.has(dir))) return 4;
+  if (commentFiles.map(packageFloor).some((pkg) => pkg && meta.packages.has(pkg))) return 2;
+  return 0;
+}
+
+export function formatPromptCandidate(candidate: ReviewCandidate): string {
+  const files = candidate.files.slice(0, CANDIDATE_PROMPT_FILES);
+  const extra = candidate.files.length > CANDIDATE_PROMPT_FILES
+    ? ` +${candidate.files.length - CANDIDATE_PROMPT_FILES}`
+    : "";
+  const fileList = files.length > 0 ? `${files.join(", ")}${extra}` : "—";
+  return `- ${candidate.id}: ${candidate.gist} (from ${candidate.pr}; files: ${fileList})`;
+}
+
+export function capPromptContext(
+  prBody: string,
+  comments: string[],
+  budget = PROMPT_CONTEXT_CHARS,
+): { body: string; comments: string } {
+  const bodyText = prBody.trim() ? prBody : "(empty)";
+  if (comments.length === 0) {
+    return { body: truncateHead(bodyText, budget), comments: "(none)" };
+  }
+  const bodyCap = Math.floor(budget * 0.4);
+  const body = truncateHead(bodyText, bodyCap);
+  const commentBudget = Math.max(0, budget - body.length);
+  return { body, comments: capCommentHeads(comments, commentBudget) };
+}
+
+function truncateHead(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const keep = Math.max(0, max - 16);
+  return `${text.slice(0, keep)}\n...(truncated)`;
+}
+
+function capCommentHeads(comments: string[], budget: number): string {
+  const sep = "\n\n---\n\n";
+  const overhead = sep.length * Math.max(0, comments.length - 1);
+  let per = Math.floor(Math.max(0, budget - overhead) / Math.max(comments.length, 1));
+  per = Math.max(40, per);
+  const render = (width: number) => comments.map((comment) => truncateHead(comment, width)).join(sep);
+  let out = render(per);
+  while (out.length > budget && per > 40) {
+    per = Math.max(40, Math.floor(per * 0.75));
+    const next = render(per);
+    if (next.length >= out.length) break;
+    out = next;
+  }
+  if (out.length > budget) return truncateHead(out, budget);
+  return out;
+}
+
+export function capCommitMessages(messages: string[], budget = PROMPT_COMMITS_CHARS): string {
+  if (messages.length === 0) return "(none)";
+  return capCommentHeads(messages, budget);
+}
+
+export function selectPromptMemories(
+  memories: Memory[],
+  input: {
+    review_comments: string[];
+    reviewer_comments?: Array<{ body: string; path?: string }>;
+    files?: string[];
+    title?: string;
+    body?: string;
+  },
+  k = PROMPT_MEMORY_K,
+): Memory[] {
+  if (memories.length <= k) return memories;
+  const query = tokenize([
+    ...(input.reviewer_comments ?? []).map((comment) => comment.body),
+    ...input.review_comments,
+    input.title ?? "",
+    input.body ?? "",
+    ...(input.files ?? []),
+  ].join(" "));
+  const index = buildBm25Index(memories.map((memory) => tokenize(`${firstLine(memory.body)} ${memory.body}`)));
+  const scores = bm25ScoresFromIndex(query, index);
+  return memories
+    .map((memory, docIndex) => ({ memory, score: scores[docIndex] ?? 0 }))
+    .sort((left, right) => right.score - left.score || left.memory.frontmatter.id.localeCompare(right.memory.frontmatter.id))
+    .slice(0, k)
+    .map((item) => item.memory);
+}
+
 export function generateDistillationPrompt(input: LearnInput): string {
-  const existingIndex = input.existing_memories
-    .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)} (paths: ${memory.frontmatter.paths.join(", ")}; scope: ${memory.frontmatter.scope ?? "—"})`)
+  const existingIndex = selectPromptMemories(input.existing_memories, {
+    review_comments: input.review_comments,
+    reviewer_comments: input.reviewer_comments,
+    files: input.files,
+    title: input.title,
+    body: input.pr_body,
+  })
+    .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)}`)
     .join("\n");
   const candidateIndex = selectPromptCandidates(input.candidates ?? [], {
     review_comments: input.review_comments,
@@ -145,8 +267,10 @@ export function generateDistillationPrompt(input: LearnInput): string {
     title: input.title,
     body: input.pr_body,
   })
-    .map((candidate) => `- ${candidate.id}: ${candidate.gist} (from ${candidate.pr}; files: ${candidate.files.join(", ") || "—"})`)
+    .map((candidate) => formatPromptCandidate(candidate))
     .join("\n");
+  const context = capPromptContext(input.pr_body, input.review_comments);
+  const commits = capCommitMessages(input.commit_messages);
 
   return `You are reviewing a closed pull request to extract reusable engineering knowledge for the team.
 This PR may be merged or closed without merging. Human review comments are valid evidence either way.
@@ -154,13 +278,13 @@ This PR may be merged or closed without merging. Human review comments are valid
 PR #${input.pr_number}
 
 ## PR Description
-${input.pr_body || "(empty)"}
+${context.body}
 
 ## Review Comments
-${input.review_comments.length > 0 ? input.review_comments.join("\n\n---\n\n") : "(none)"}
+${context.comments}
 
 ## Commit Messages
-${input.commit_messages.join("\n") || "(none)"}
+${commits}
 
 ## Diff Summary
 ${input.diff.slice(0, 3000)}${input.diff.length > 3000 ? "\n...(truncated)" : ""}
@@ -582,7 +706,7 @@ export function matchingReviewer(
       });
     if (hit) return hit.author;
   }
-  if (comments.length === 1) return comments[0]!.author;
+  if (comments.length > 0) return comments[comments.length - 1]!.author;
   return matched?.reviewer
     || context.author
     || "teamrecall";

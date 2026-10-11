@@ -36,6 +36,10 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("merge-candidates");
     expect(template).toContain("fork PR");
     expect(template).toContain("+teamrecall/state:teamrecall/state");
+    expect(template).toContain("git ls-remote --exit-code origin refs/heads/teamrecall/state");
+    expect(template).toContain("::notice::teamrecall/state does not exist yet (first run)");
+    expect(template).toContain("::warning::Could not fetch teamrecall/state (read-only token)");
+    expect(template).not.toContain("missing branch or read-only token");
     expect(template).toContain("::warning::");
     expect(template).not.toContain("actions_cache");
     expect(template).toContain("needs: decide");
