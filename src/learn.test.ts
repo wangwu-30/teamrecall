@@ -18,6 +18,7 @@ import {
   generateDistillationPrompt,
   inferPaths,
   keepSpecificPaths,
+  resolveMemoryPaths,
   parseDistillationResponse,
   planLearnOutcomes,
 } from "./learn.js";
@@ -164,9 +165,22 @@ describe("inferPaths", () => {
     ])).not.toContain("packages/**");
   });
 
-  it("caps inferred globs and leaves root files exact", () => {
+  it("merges many sibling dirs to their common ancestor instead of dropping them", () => {
+    const siblings = inferPaths(Array.from({ length: 7 }, (_, i) => `src/mod${i}/f.ts`));
+    expect(siblings).toEqual(["src/**", "src/**/*.ts"]);
+    const sixUnrelated = inferPaths([
+      "a/x/1.ts", "a/x/2.ts", "b/x/1.ts", "c/x/1.ts", "d/x/1.ts", "e/x/1.ts", "f/x/1.ts",
+    ]);
+    expect(sixUnrelated).toEqual(expect.arrayContaining([
+      "a/x/**", "b/x/**", "c/x/**", "d/x/**", "e/x/**", "f/x/**",
+    ]));
+    expect(sixUnrelated.filter((glob) => glob.endsWith("/**")).length).toBe(6);
+  });
+
+  it("leaves root files exact and does not invent **/*", () => {
     const many = inferPaths(Array.from({ length: 12 }, (_, i) => `d${i}/x/f${i}.ts`).concat(["README.md"]));
-    expect(many.length).toBeLessThanOrEqual(5);
+    for (let i = 0; i < 12; i++) expect(many).toContain(`d${i}/x/**`);
+    expect(many).toContain("README.md");
     expect(inferPaths(["README.md"])).toEqual(["README.md"]);
     expect(inferPaths([])).toEqual([]);
   });
@@ -192,6 +206,21 @@ describe("inferPaths", () => {
       ["a/x.ts", "b/y.ts"],
       ["a/x.ts"],
     )).toEqual(["**"]);
+    expect(keepSpecificPaths(
+      ["**/*.test.ts"],
+      ["src/a.test.ts", "src/a.ts"],
+      ["src/a.test.ts"],
+    )).toEqual(["**/*.test.ts"]);
+    expect(keepSpecificPaths(
+      ["**/*.ts", "**/*.tsx"],
+      ["src/a.ts", "src/b.tsx"],
+      ["src/a.ts"],
+    )).toEqual(["**/*.ts", "**/*.tsx"]);
+    expect(resolveMemoryPaths(["**/*.test.ts"], ["src/a.test.ts"], ["src/a.test.ts"])).toEqual({
+      paths: ["**/*.test.ts"],
+      source: "distiller",
+    });
+    expect(resolveMemoryPaths(undefined, [], ["src/a.ts"]).source).toBe("inferred");
   });
 });
 
@@ -240,6 +269,34 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     const parsed = parseMemory(planned.mutations[0]?.content ?? "");
     expect(parsed?.frontmatter.paths).toEqual(["**"]);
     expect(parsed?.frontmatter.scope).toBe("always");
+    expect(parsed?.frontmatter.paths_source).toBe("distiller");
+  });
+
+  it("keeps extension globs as triggered distiller paths", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Test files",
+      body: "Keep tests next to the code they cover.",
+      paths: ["**/*.test.ts"],
+      reasoning: "test glob",
+    }, [], context({ files: ["src/a.test.ts"], evidence_files: ["src/a.test.ts"] }), "/tmp/project");
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.paths).toEqual(["**/*.test.ts"]);
+    expect(parsed?.frontmatter.scope).toBe("triggered");
+    expect(parsed?.frontmatter.paths_source).toBe("distiller");
+  });
+
+  it("records inferred provenance when the distiller omitted applies_to", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Gateway retries",
+      body: "Register retries only in the gateway wrapper.",
+      reasoning: "no applies_to",
+    }, [], context({ files: ["src/gateway.ts"], evidence_files: ["src/gateway.ts"] }), "/tmp/project");
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.paths_source).toBe("inferred");
+    expect(parsed?.frontmatter.paths.length).toBeGreaterThan(0);
+    expect(parsed?.frontmatter.scope).toBe("triggered");
   });
 
   it("plans a new memory file and caps writes at 3", () => {

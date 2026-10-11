@@ -1,6 +1,7 @@
 export type MemoryKind = "gotcha" | "decision" | "convention" | "map";
 export type MemoryStatus = "active" | "retired" | "superseded" | "abandoned";
 export type MemoryScope = "always" | "triggered";
+export type PathsSource = "distiller" | "inferred" | "human";
 export type LearnAction = "reuse" | "update" | "merge" | "propose_retire" | "new" | "no_op";
 
 export interface MemoryTrigger {
@@ -13,6 +14,7 @@ export interface MemoryFrontmatter {
   id: string;
   kind: MemoryKind;
   paths: string[];
+  paths_source?: PathsSource;
   scope?: MemoryScope;
   triggers?: MemoryTrigger[];
   evidence: {

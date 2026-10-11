@@ -16,6 +16,7 @@ function memory(partial: {
   id: string;
   body: string;
   paths?: string[];
+  paths_source?: Memory["frontmatter"]["paths_source"];
   scope?: "always" | "triggered";
   triggers?: Memory["frontmatter"]["triggers"];
 }): Memory {
@@ -24,6 +25,7 @@ function memory(partial: {
       id: partial.id,
       kind: "convention",
       paths: partial.paths ?? ["src/**/*.ts"],
+      paths_source: partial.paths_source ?? "distiller",
       scope: partial.scope,
       triggers: partial.triggers,
       evidence: { pr: "#1" },
@@ -162,6 +164,7 @@ describe("trigger / contains / tokens / pr signals", () => {
       id: "M-001",
       scope: "triggered",
       paths: [".changeset/*.md"],
+      paths_source: "distiller",
       body: "Every user-facing change needs a changeset file under .changeset.",
     });
     const noisy = memory({
@@ -179,6 +182,67 @@ describe("trigger / contains / tokens / pr signals", () => {
     });
     expect(result.matched[0]?.id).toBe("M-001");
     expect(result.matched[0]?.reason).toBe("glob");
+  });
+
+  it("sorts by (tier, bm25) so a zero-BM25 path hit beats a max-BM25 non-hit", async () => {
+    const pathHit = memory({
+      id: "M-002",
+      scope: "triggered",
+      paths: ["src/auth/**"],
+      paths_source: "distiller",
+      body: "Keep auth cookies httpOnly.",
+    });
+    const bm25Only = memory({
+      id: "M-001",
+      scope: "triggered",
+      paths: ["docs/**"],
+      body: `${"formatter ".repeat(80)}unrelated docs note`,
+    });
+    const result = await runRetrieve({
+      memories: [bm25Only, pathHit],
+      files: ["src/auth/login.ts"],
+      title: "formatter formatter formatter",
+      body: "formatter ".repeat(40),
+      k: 2,
+    });
+    expect(result.matched.map((item) => item.id)).toEqual(["M-002", "M-001"]);
+    expect(result.matched[0]?.reason).toBe("glob");
+    expect(result.matched[0]!.score).toBeGreaterThan(result.matched[1]!.score);
+  });
+
+  it("does not hard-tier inferred paths; fills remaining slots with BM25", async () => {
+    const inferred = memory({
+      id: "M-010",
+      scope: "triggered",
+      paths: ["src/**"],
+      paths_source: "inferred",
+      body: "A leftover note about retries in the gateway wrapper.",
+    });
+    const semantic = memory({
+      id: "M-011",
+      scope: "triggered",
+      paths: ["docs/**"],
+      paths_source: "inferred",
+      body: `${"formatter ".repeat(40)}docs note`,
+    });
+    const extra = Array.from({ length: 3 }, (_, index) => memory({
+      id: `M-02${index}`,
+      scope: "triggered",
+      paths: ["docs/**"],
+      paths_source: "inferred",
+      body: `Unrelated note ${index} about logging`,
+    }));
+    const result = await runRetrieve({
+      memories: [inferred, semantic, ...extra],
+      files: ["src/a.ts"],
+      title: "formatter formatter formatter",
+      body: "formatter ".repeat(20),
+      k: 5,
+    });
+    expect(result.matched).toHaveLength(5);
+    expect(result.matched.find((item) => item.id === "M-010")?.reason).toBe("bm25");
+    expect(result.matched[0]?.id).toBe("M-011");
+    expect(result.matched.map((item) => item.id)).toContain("M-010");
   });
 
   it("does not treat empty or ** paths as a path match", () => {

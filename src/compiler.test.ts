@@ -122,6 +122,33 @@ describe("compileMemories", () => {
     expect(compiled.cursor_rules.get("teamrecall-M-002.mdc")).toContain("alwaysApply: false");
   });
 
+  it("compiles empty-path memories as always only when scope is always", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-004",
+        scope: "always",
+        paths: [],
+        body: "Mention the change in every PR description.",
+      }),
+    ]);
+    expect(compiled.claude_rules.get("M-004.md")).toContain('- "**"');
+    expect(compiled.cursor_rules.get("teamrecall-M-004.mdc")).toContain("alwaysApply: true");
+  });
+
+  it("does not compile triggered memories with empty paths into always-loaded rule files", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-003",
+        scope: "triggered",
+        paths: [],
+        body: "No evidence, so this stays an index title only.",
+      }),
+    ]);
+    expect(compiled.agents_md).toContain("**M-003**: No evidence, so this stays an index title only.");
+    expect(compiled.claude_rules.has("M-003.md")).toBe(false);
+    expect(compiled.cursor_rules.has("teamrecall-M-003.mdc")).toBe(false);
+  });
+
   it("keeps the AGENTS.md index at or under 40 lines", async () => {
     const memories = Array.from({ length: 40 }, (_, index) =>
       memory({ id: `M-${String(index + 1).padStart(3, "0")}`, body: `Lesson ${index + 1}` }),

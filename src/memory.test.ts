@@ -105,6 +105,8 @@ Body`;
     })).toBe(true);
     expect(isValidFrontmatter({ ...base, scope: "always" })).toBe(true);
     expect(isValidFrontmatter({ ...base, scope: "sometimes" })).toBe(false);
+    expect(isValidFrontmatter({ ...base, paths_source: "distiller" })).toBe(true);
+    expect(isValidFrontmatter({ ...base, paths_source: "guessed" })).toBe(false);
     expect(isValidFrontmatter({ ...base, triggers: [{ contains: "x" }] })).toBe(false);
     expect(parseMemory(`---
 id: M-010
@@ -140,13 +142,14 @@ Every user-facing change needs a changeset.
 });
 
 describe("defaultScope", () => {
-  it("defaults to always for process/style rules and triggered for specific paths", () => {
+  it("defaults to always only for repo-wide paths; body text does not decide scope", () => {
     expect(defaultScope(["**/*"], "A specific file rule")).toBe("always");
-    expect(defaultScope(["src/auth/**"], "Mention the change in the PR description.")).toBe("always");
+    expect(defaultScope(["src/auth/**"], "Mention the change in the PR description.")).toBe("triggered");
     expect(defaultScope(["src/auth/**"], "Register retries only in the gateway.")).toBe("triggered");
     expect(defaultScope(["src/x.ts"], "Address review comments by adding a test")).toBe("triggered");
     expect(defaultScope(["packages/a/*"], "Keep code comments brief; no narration")).toBe("triggered");
     expect(defaultScope(["src/x.ts"], "Please disclose AI usage in the PR body")).toBe("triggered");
+    expect(defaultScope(["src/helpers.rs"], "See the PR description for how this helper is used.")).toBe("triggered");
     expect(defaultScope([], "No evidence files")).toBe("triggered");
     expect(memoryScope({
       frontmatter: {

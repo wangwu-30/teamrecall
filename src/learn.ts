@@ -10,7 +10,7 @@ import {
 } from "./memory.js";
 import { defaultScope } from "./memory.js";
 import { globMatches } from "./sweep.js";
-import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, PullRequestContext } from "./types.js";
+import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, PathsSource, PullRequestContext } from "./types.js";
 
 export interface LearnInput {
   pr_number: string;
@@ -301,12 +301,14 @@ function planOne(
     const id = generateMemoryId(usedIds);
     const title = outcome.title || firstLine(outcome.body || "Untitled lesson");
     const body = clampBody(outcome.body || title);
-    const paths = keepSpecificPaths(outcome.paths, trackedFiles, evidenceFiles(context));
+    const resolved = resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context));
+    const paths = resolved.paths;
     const scope = outcome.scope ?? defaultScope(paths, body);
     const frontmatter: MemoryFrontmatter = {
       id,
       kind: (outcome.kind as MemoryKind) || inferKind(body),
       paths,
+      paths_source: resolved.source,
       scope,
       ...(outcome.triggers && outcome.triggers.length > 0 ? { triggers: outcome.triggers } : {}),
       evidence,
@@ -360,11 +362,13 @@ function planOne(
     };
   }
 
+  const resolved = outcome.paths && outcome.paths.length > 0
+    ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
+    : undefined;
   const nextFrontmatter: MemoryFrontmatter = {
     ...target.frontmatter,
-    paths: outcome.paths && outcome.paths.length > 0
-      ? keepSpecificPaths(outcome.paths, trackedFiles, evidenceFiles(context))
-      : target.frontmatter.paths,
+    paths: resolved?.paths ?? target.frontmatter.paths,
+    ...(resolved ? { paths_source: resolved.source } : {}),
     scope: outcome.scope ?? target.frontmatter.scope,
     triggers: outcome.triggers ?? target.frontmatter.triggers,
     evidence: {
@@ -466,13 +470,10 @@ export function fallbackOutcomeFromReviews(context: PullRequestContext): LearnOu
     return { action: "no_op", reasoning: "No reusable directive in review comments" };
   }
   const body = clampBody(directive.replace(/\s+/g, " "));
-  const paths = inferPaths(evidenceFiles(context));
   return {
     action: "new",
     title: firstLine(body),
     kind: inferKind(body),
-    paths,
-    scope: defaultScope(paths, body),
     body,
     reasoning: "Deterministic fallback from a review directive",
   };
@@ -494,14 +495,10 @@ export function evidenceFiles(context: PullRequestContext): string[] {
   return context.evidence_files.length > 0 ? context.evidence_files : context.files;
 }
 
-/** Repo-wide globs with no directory prefix (star-star, *.md). Package-level dir/** is kept. */
+/** Only true repo-wide globs. Extension globs such as star-star/*.test.ts stay specific. */
 export function isRepoWideGlob(glob: string): boolean {
   const normalized = glob.replaceAll("\\", "/").replace(/\/$/, "");
-  return normalized === "**"
-    || normalized === "**/*"
-    || normalized === "*"
-    || /^\*\.[^/]+$/.test(normalized)
-    || /^\*\*\/\*\.[^/]+$/.test(normalized);
+  return normalized === "**" || normalized === "**/*" || normalized === "*";
 }
 
 export function isOverlyBroadTopLevel(glob: string): boolean {
@@ -575,8 +572,10 @@ function mergeGroups(groups: PathGroup[], max: number): PathGroup[] {
       }
     }
     if (bestI < 0) {
-      next.sort((a, b) => b.files.length - a.files.length || a.dir.localeCompare(b.dir));
-      next = next.slice(0, max);
+      const ancestor = deepestCommonDir(next.flatMap((group) => group.files));
+      if (ancestor && !isTooShallow(ancestor)) {
+        return [{ dir: ancestor, files: next.flatMap((group) => group.files) }];
+      }
       break;
     }
     const merged: PathGroup = {
@@ -618,23 +617,25 @@ export function inferPaths(files: string[]): string[] {
     }
     const capped = mergeGroups(groups, Math.max(1, MAX_INFER_PATH_GLOBS - globs.length));
     for (const group of capped) globs.push(`${group.dir}/**`);
-    for (const group of capped) {
-      if (globs.length >= MAX_INFER_PATH_GLOBS) break;
-      const exts = unique(group.files.map(extensionOf).filter(Boolean));
-      if (exts.length === 1) globs.push(`${group.dir}/**/*${exts[0]}`);
+    if (capped.length <= MAX_INFER_PATH_GLOBS) {
+      for (const group of capped) {
+        if (globs.length >= MAX_INFER_PATH_GLOBS) break;
+        const exts = unique(group.files.map(extensionOf).filter(Boolean));
+        if (exts.length === 1) globs.push(`${group.dir}/**/*${exts[0]}`);
+      }
     }
   }
 
-  return unique(globs).slice(0, MAX_INFER_PATH_GLOBS);
+  return unique(globs);
 }
 
-export function keepSpecificPaths(
+export function resolveMemoryPaths(
   proposed: string[] | undefined,
   tracked: string[],
   evidence: string[],
-): string[] {
+): { paths: string[]; source: PathsSource } {
   const candidates = unique((proposed ?? []).map((glob) => glob.replaceAll("\\", "/")));
-  if (candidates.length === 0) return inferPaths(evidence);
+  if (candidates.length === 0) return { paths: inferPaths(evidence), source: "inferred" };
   const universe = unique([...tracked, ...evidence]);
   const specific: string[] = [];
   let sawRepoWide = false;
@@ -647,9 +648,17 @@ export function keepSpecificPaths(
       specific.push(glob);
     }
   }
-  if (specific.length > 0) return specific;
-  if (sawRepoWide) return ["**"];
-  return inferPaths(evidence);
+  if (specific.length > 0) return { paths: specific, source: "distiller" };
+  if (sawRepoWide) return { paths: ["**"], source: "distiller" };
+  return { paths: inferPaths(evidence), source: "inferred" };
+}
+
+export function keepSpecificPaths(
+  proposed: string[] | undefined,
+  tracked: string[],
+  evidence: string[],
+): string[] {
+  return resolveMemoryPaths(proposed, tracked, evidence).paths;
 }
 
 function summarizeAction(outcomes: LearnOutcome[]): LearnOutcome["action"] {

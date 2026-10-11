@@ -74,7 +74,7 @@ function ruleLesson(text: string, source: string): LearnOutcome {
     action: "new",
     title: body.split(/[.!?]/)[0] || slugify(body),
     kind: "convention",
-    paths: ["**/*"],
+    paths: [],
     body,
     reasoning: `Backfilled from ${source}`,
   };
@@ -164,8 +164,9 @@ async function writeNewMemory(
   const frontmatter: MemoryFrontmatter = {
     id,
     kind: lesson.kind ?? "convention",
-    paths: lesson.paths ?? ["**/*"],
-    scope: lesson.scope ?? defaultScope(lesson.paths ?? ["**/*"], lesson.body ?? ""),
+    paths: lesson.paths ?? [],
+    paths_source: "human",
+    scope: lesson.scope ?? defaultScope(lesson.paths ?? [], lesson.body ?? ""),
     evidence: { pr: context.number === "backfill" ? undefined : `#${context.number}` },
     author: context.author,
     created,

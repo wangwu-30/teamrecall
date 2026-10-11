@@ -1,11 +1,13 @@
 import { loadConfig, loadMemories, memoryScope } from "./memory.js";
 import { globMatches } from "./sweep.js";
-import type { Memory, MemoryTrigger } from "./types.js";
+import type { Memory, MemoryTrigger, PathsSource } from "./types.js";
 
 export const DEFAULT_RETRIEVE_K = 5;
 export const DEFAULT_ALWAYS_CAP = 8;
 export const PATH_BOOST = 8;
 export const TRIGGER_CONTAINS_BOOST = 4;
+/** Soft bump for inferred path hits; never a hard tier (stays in [0, 1+boost]). */
+export const INFERRED_PATH_BOOST = 0.25;
 
 const STOP = new Set([
   "the", "a", "an", "and", "or", "to", "of", "in", "for", "on", "with",
@@ -136,6 +138,10 @@ export function pathMatches(memory: Memory, files: string[]): boolean {
   return globs.some((glob) => files.some((file) => globMatches(glob, file)));
 }
 
+export function isTrustedPathSource(source: PathsSource | undefined): boolean {
+  return source === "distiller" || source === "human";
+}
+
 export function triggerContainsMatches(
   memory: Memory,
   input: { files: string[]; diff?: string; title?: string; body?: string },
@@ -211,12 +217,14 @@ function scoreMemories(
 ): RetrievedMemory[] {
   const raw = bm25Scores(query, memories.map(documentTokens));
   const max = Math.max(0, ...raw);
-  return memories.map((memory, index) => {
+  const ranked = memories.map((memory, index) => {
     const bm25 = max > 0 ? (raw[index] ?? 0) / max : 0;
     let tier = 0;
     let reason: RetrievedMemory["reason"] = alwaysReason ? "always" : "bm25";
     if (!alwaysReason) {
-      if (pathMatches(memory, input.files)) {
+      const pathHit = pathMatches(memory, input.files);
+      const trusted = isTrustedPathSource(memory.frontmatter.paths_source);
+      if (pathHit && trusted) {
         tier = 1;
         reason = "glob";
       }
@@ -224,9 +232,18 @@ function scoreMemories(
         tier = 2;
         reason = "trigger";
       }
+      const inferredHit = pathHit && !trusted && tier === 0;
+      return {
+        memory,
+        tier,
+        bm25: bm25 + (inferredHit ? INFERRED_PATH_BOOST : 0),
+        reason,
+      };
     }
-    return toRetrieved(memory, tier + bm25, reason);
-  }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    return { memory, tier, bm25, reason };
+  });
+  ranked.sort((a, b) => b.tier - a.tier || b.bm25 - a.bm25 || a.memory.frontmatter.id.localeCompare(b.memory.frontmatter.id));
+  return ranked.map((item) => toRetrieved(item.memory, item.tier * 2 + item.bm25, item.reason));
 }
 
 export async function runRetrieve(input: RetrieveInput): Promise<RetrieveResult> {

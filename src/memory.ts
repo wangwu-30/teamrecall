@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 import { DEFAULT_TTL_DAYS, MAX_BODY_WORDS } from "./constants.js";
-import type { Memory, MemoryFrontmatter, MemoryKind, MemoryScope, MemoryStatus, MemoryTrigger, TeamRecallConfig } from "./types.js";
+import type { Memory, MemoryFrontmatter, MemoryKind, MemoryScope, MemoryStatus, MemoryTrigger, PathsSource, TeamRecallConfig } from "./types.js";
 import { exists } from "./utils/atomic.js";
 
 const DEFAULT_CONFIG: TeamRecallConfig = {
@@ -14,7 +14,7 @@ const DEFAULT_CONFIG: TeamRecallConfig = {
 const KINDS: MemoryKind[] = ["gotcha", "decision", "convention", "map"];
 const STATUSES: MemoryStatus[] = ["active", "retired", "superseded", "abandoned"];
 const SCOPES: MemoryScope[] = ["always", "triggered"];
-const PROCESS_STYLE = /\b(pr description|pull request description|commit message|changelog)\b/i;
+const PATH_SOURCES: PathsSource[] = ["distiller", "inferred", "human"];
 
 export async function loadConfig(projectDir: string): Promise<TeamRecallConfig> {
   const configPath = path.join(projectDir, ".memory", "config.yml");
@@ -78,6 +78,7 @@ export function isValidFrontmatter(fm: unknown): fm is MemoryFrontmatter {
     Array.isArray(value.paths) &&
     value.paths.every((item) => typeof item === "string") &&
     (value.scope === undefined || SCOPES.includes(value.scope as MemoryScope)) &&
+    (value.paths_source === undefined || PATH_SOURCES.includes(value.paths_source as PathsSource)) &&
     (value.triggers === undefined || (Array.isArray(value.triggers) && value.triggers.every(isValidTrigger))) &&
     (evidence === undefined || typeof evidence === "object") &&
     typeof value.author === "string" &&
@@ -97,8 +98,8 @@ export function isValidTrigger(value: unknown): value is MemoryTrigger {
   return true;
 }
 
-export function defaultScope(paths: string[], body: string): MemoryScope {
-  if (isBroadPaths(paths) || PROCESS_STYLE.test(body)) return "always";
+export function defaultScope(paths: string[], _body = ""): MemoryScope {
+  if (isBroadPaths(paths)) return "always";
   return "triggered";
 }
 

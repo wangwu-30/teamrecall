@@ -31,6 +31,7 @@ export {
   detectConflicts,
   inferPaths,
   keepSpecificPaths,
+  resolveMemoryPaths,
   pathsOverlap,
   planLearnOutcomes,
 } from "./learn.js";
@@ -59,7 +60,7 @@ export {
   validateMemoryBody,
   validateSupersededBy,
 } from "./memory.js";
-export { formatRetrieveText, matchContains, runRetrieve, tokenize, triggerMatches } from "./retrieve.js";
+export { formatRetrieveText, isTrustedPathSource, matchContains, runRetrieve, tokenize, triggerMatches } from "./retrieve.js";
 export { expandBraces, formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
 export type {
   CompiledOutput,
@@ -68,6 +69,7 @@ export type {
   MemoryFrontmatter,
   MemoryScope,
   MemoryTrigger,
+  PathsSource,
   PullRequestContext,
   TeamRecallConfig,
 } from "./types.js";
