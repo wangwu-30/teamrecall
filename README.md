@@ -110,7 +110,7 @@ No manual wiki updates. No asking around. Just works.
 Follow https://github.com/wangwu-30/teamrecall/blob/main/INSTALL.md to set up teamrecall in this repo
 ```
 
-The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y github:wangwu-30/teamrecall#<latest-tag> init --yes --json`, backfills, compiles, runs `doctor`, and opens the first PR. Re-run is safe. Zero-secret mode only collects recurrence candidates and compiles existing hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI or `CLAUDE_CODE_OAUTH_TOKEN`).
+The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y github:wangwu-30/teamrecall#<latest-tag> init --yes --json` (latest release tag, currently `v0.3.0`), backfills, compiles, runs `doctor`, and opens the first PR. Re-run is safe. Zero-secret mode only collects recurrence candidates and compiles existing hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI or `CLAUDE_CODE_OAUTH_TOKEN`).
 
 **Or run it yourself:**
 
@@ -261,7 +261,7 @@ Candidate gists live on the `teamrecall/state` branch only (public on public rep
 | **Personal memory** (claude-mem, etc.) | Easy per-user setup | Not shared, no review, API cost |
 | **Wiki / Notion** | Flexible | Agents can't read, becomes stale |
 | **Custom prompts** (.cursorrules, CLAUDE.md) | Works today | Manual, no provenance, no TTL |
-| **teamrecall** | **Git-native, reviewed, auto-learned, zero infra** | Early stage (v0.1) |
+| **teamrecall** | **Git-native, reviewed, auto-learned, zero infra** | Early stage (v0.3.0) |
 
 **中文：**
 
@@ -270,7 +270,7 @@ Candidate gists live on the `teamrecall/state` branch only (public on public rep
 | **个人记忆**（claude-mem 等）| 每个用户设置简单 | 不共享、无审查、API 成本 |
 | **Wiki / Notion** | 灵活 | 助手无法读取，会过时 |
 | **自定义提示**（.cursorrules、CLAUDE.md）| 现在就能用 | 手动、无来源、无 TTL |
-| **teamrecall** | **基于 Git、经过审查、自动学习、零基础设施** | 早期阶段（v0.1）|
+| **teamrecall** | **基于 Git、经过审查、自动学习、零基础设施** | 早期阶段（v0.3.0）|
 
 ---
 
@@ -310,42 +310,69 @@ Candidate gists live on the `teamrecall/state` branch only (public on public rep
 
 **Q: What about staleness?**
 
-**English:** Each memory has a `review_after` date (default: +90 days). On use (referenced in a PR), it's auto-renewed. A future weekly job will flag stale memories for review.
+**English:** Each memory has a `review_after` date (default: +90 days). On use (referenced in a PR), it's auto-renewed. The weekly `sweep` job flags expired memories for review and proposes retiring memories whose paths no longer match tracked files.
 
-**中文：** 每个记忆都有一个 `review_after` 日期（默认：+90 天）。使用时（在 PR 中引用），它会自动续期。未来的每周任务将标记过时的记忆以供审查。
+**中文：** 每个记忆都有一个 `review_after` 日期（默认：+90 天）。使用时（在 PR 中引用），它会自动续期。每周 `sweep` 任务会标记过期记忆以供审查，并提议退休路径已不匹配任何受跟踪文件的记忆。
 
 ---
 
 ## Demo | 演示
 
-**[GIF placeholder]**
-
-*(Week 2: record GIF showing Alice's PR → bot PR → Bob's Cursor agent referencing M-012)*
+<!--
+[GIF placeholder / GIF 占位]
+Record GIF showing Alice's PR → bot PR → Bob's Cursor agent referencing M-012.
+录制 GIF：Alice 的 PR → 机器人 PR → Bob 的 Cursor 助手引用 M-012。
+-->
 
 ---
 
 ## Roadmap | 路线图
 
-**v0.1 (week 1)** — ✓ Core: init, compile, types, tests, GitHub Action scaffold
+**Current release: v0.3.0.** Shipped items are confirmed by local git history and repository files.
 
-**v0.2 (week 2)**:
-- Full `learn` command (fetch PR via `gh`, run `claude -p`, parse outcome)
-- Dedupe/conflict/staleness weekly job
-- Demo repo with sample memories
-- GIF walkthrough
+**English — shipped:**
+- [x] Core: init, compile, types, tests, GitHub Action scaffold
+- [x] Full `learn` command and dedupe handling
+- [x] Claude/Copilot indexes, memory lifecycle, and weekly `sweep` for expired and path-dead memories
+- [x] Agent onboarding via [`INSTALL.md`](INSTALL.md): one-line setup, idempotent init, and zero-secret candidate collection
+- [x] Learning from closed-unmerged PRs with human review comments
+- [x] Experimental hybrid retrieval (`retrieve`): paths/triggers plus BM25; opt-in, outside default compile
+- [x] Recurrence-based memory promotion (requires an LLM engine)
 
-**v0.3+**:
-- Slack/Discord notifications for new memories
-- VS Code extension
-- Analytics (most-used memories)
+**English — open:**
+- [ ] Conflict handling and duplicate merge suggestions in the weekly job
+- [ ] Demo repo with sample memories (usage examples exist in [`examples/`](examples/))
+- [ ] GIF walkthrough
+- [ ] Slack/Discord notifications for new memories
+- [ ] VS Code extension
+- [ ] Analytics (most-used memories)
+
+**当前版本：v0.3.0。** 已交付项依据本地 Git 历史和仓库文件确认。
+
+**中文 — 已交付：**
+- [x] 核心：init、compile、类型、测试、GitHub Action 框架
+- [x] 完整 `learn` 命令及去重处理
+- [x] Claude/Copilot 索引、记忆生命周期，以及检查过期记忆和失效路径的每周 `sweep`
+- [x] 通过 [`INSTALL.md`](INSTALL.md) 引导编码助手安装：一行设置、可重复执行的 init、零密钥候选收集
+- [x] 从有人工审查评论、关闭但未合并的 PR 中学习
+- [x] 实验性混合检索（`retrieve`）：路径/触发条件与 BM25；需主动调用，不用于默认编译
+- [x] 基于重复出现的记忆晋升（需要 LLM 引擎）
+
+**中文 — 待完成：**
+- [ ] 每周任务中的冲突处理与重复记忆合并建议
+- [ ] 带有示例记忆的演示仓库（[`examples/`](examples/) 已有用法示例）
+- [ ] GIF 演示
+- [ ] 新记忆的 Slack/Discord 通知
+- [ ] VS Code 扩展
+- [ ] 分析统计（最常使用的记忆）
 
 ---
 
 ## Contributing | 贡献
 
-**English:** PRs welcome! See `CONTRIBUTING.md` (coming soon).
+**English:** PRs welcome! See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-**中文：** 欢迎 PR！参见 `CONTRIBUTING.md`（即将推出）。
+**中文：** 欢迎 PR！参见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ---
 
