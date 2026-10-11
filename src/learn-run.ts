@@ -22,9 +22,9 @@ import { hydrateCandidates } from "./state-branch.js";
 import {
   buildLearnPrBody,
   buildLearnPrTitle,
+  applyCandidateDecision,
   fallbackOutcomeFromReviews,
   generateDistillationPrompt,
-  maybePromoteFromCandidates,
   parseDistillationResponse,
   planLearnOutcomes,
   type LearnPlan,
@@ -196,6 +196,7 @@ export async function runLearn(input: {
     candidates: reviewCandidates,
     files: context.files,
     title: context.title,
+    reviewer_comments: context.reviewer_comments,
   });
 
   let outcome: LearnOutcome;
@@ -225,9 +226,9 @@ export async function runLearn(input: {
   }
 
   const trackedFiles = await listRepoFiles(projectDir);
-  outcome = maybePromoteFromCandidates(outcome, reviewCandidates, context, {
-    deterministic: distiller === "deterministic",
-  });
+  if (distiller === "llm") {
+    outcome = applyCandidateDecision(outcome, reviewCandidates);
+  }
   const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths, reviewCandidates);
   plan.distiller = distiller;
   plan.distiller_reason = distillerReason;

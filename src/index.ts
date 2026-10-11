@@ -98,7 +98,6 @@ export type {
   MemoryScope,
   MemoryTrigger,
   PathsSource,
-  CandidatesStore,
   PullRequestContext,
   ReviewCandidate,
   TeamRecallConfig,

@@ -9,7 +9,6 @@ const DEFAULT_CONFIG: TeamRecallConfig = {
   max_active_memories: 50,
   review_ttl_days: DEFAULT_TTL_DAYS,
   retrieve_always_cap: 8,
-  candidates_store: "state_branch",
 };
 
 const KINDS: MemoryKind[] = ["gotcha", "decision", "convention", "map"];

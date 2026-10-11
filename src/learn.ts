@@ -1,12 +1,10 @@
 import * as path from "node:path";
 import {
   extractTerms,
-  isPromotableQuality,
-  matchCandidate,
   normalizeGist,
-  toImperativeBody,
+  packageFloor,
 } from "./candidates.js";
-import { CANDIDATE_PROMPT_K, MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
+import { CANDIDATE_PROMPT_K, CANDIDATE_PROMPT_PER_COMMENT, MAX_ACTIVE_MEMORIES, MAX_LEARN_PER_PR } from "./constants.js";
 import { bm25Scores, tokenize } from "./retrieve.js";
 import {
   clampBody,
@@ -30,6 +28,7 @@ export interface LearnInput {
   candidates?: ReviewCandidate[];
   files?: string[];
   title?: string;
+  reviewer_comments?: Array<{ body: string; path?: string }>;
 }
 
 export interface DedupResult {
@@ -77,23 +76,59 @@ const ACTIONS: LearnOutcome["action"][] = [
   "no_op",
 ];
 
+export function pathProximity(commentFiles: string[], candidateFiles: string[]): number {
+  if (commentFiles.length === 0 || candidateFiles.length === 0) return 0;
+  const right = new Set(candidateFiles);
+  if (commentFiles.some((file) => right.has(file))) return 3;
+  const dirs = new Set(commentFiles.map(parentDir).filter(Boolean));
+  if (candidateFiles.some((file) => dirs.has(parentDir(file)))) return 2;
+  const packages = new Set(commentFiles.map(packageFloor).filter(Boolean));
+  if (candidateFiles.some((file) => packages.has(packageFloor(file)))) return 1;
+  return 0;
+}
+
+function parentDir(file: string): string {
+  const parts = file.replaceAll("\\", "/").split("/").filter(Boolean);
+  return parts.slice(0, -1).join("/");
+}
+
 export function selectPromptCandidates(
   candidates: ReviewCandidate[],
-  input: { review_comments: string[]; files?: string[]; title?: string; body?: string },
+  input: {
+    review_comments: string[];
+    reviewer_comments?: Array<{ body: string; path?: string }>;
+    files?: string[];
+    title?: string;
+    body?: string;
+  },
   k = CANDIDATE_PROMPT_K,
 ): ReviewCandidate[] {
   const open = candidates.filter((candidate) => !candidate.promoted_to);
   if (open.length <= k) return open;
-  const query = tokenize([
-    ...(input.files ?? []),
-    input.title ?? "",
-    input.body ?? "",
-    ...input.review_comments,
-  ].join(" "));
-  const docs = open.map((candidate) => tokenize(`${candidate.gist} ${candidate.terms.join(" ")} ${candidate.files.join(" ")}`));
-  const scores = bm25Scores(query, docs);
-  return open
-    .map((candidate, index) => ({ candidate, score: scores[index] ?? 0 }))
+  const comments = (input.reviewer_comments?.length
+    ? input.reviewer_comments
+    : input.review_comments.map((body) => ({ body, path: undefined as string | undefined })));
+  const queries = comments.length > 0 ? comments : [{ body: [input.title, input.body].filter(Boolean).join(" "), path: undefined }];
+  const docs = open.map((candidate) => tokenize(`${candidate.gist} ${candidate.terms.join(" ")}`));
+  const best = new Map<string, { candidate: ReviewCandidate; score: number }>();
+  const perComment = Math.min(CANDIDATE_PROMPT_PER_COMMENT, k);
+  for (const comment of queries) {
+    const query = tokenize(comment.body);
+    const commentFiles = comment.path ? [comment.path] : (input.files ?? []);
+    const raw = bm25Scores(query, docs);
+    const ranked = open
+      .map((candidate, index) => ({
+        candidate,
+        score: (raw[index] ?? 0) + pathProximity(commentFiles, candidate.files) * 2,
+      }))
+      .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
+      .slice(0, perComment);
+    for (const item of ranked) {
+      const prev = best.get(item.candidate.id);
+      if (!prev || item.score > prev.score) best.set(item.candidate.id, item);
+    }
+  }
+  return [...best.values()]
     .sort((left, right) => right.score - left.score || left.candidate.id.localeCompare(right.candidate.id))
     .slice(0, k)
     .map((item) => item.candidate);
@@ -105,6 +140,7 @@ export function generateDistillationPrompt(input: LearnInput): string {
     .join("\n");
   const candidateIndex = selectPromptCandidates(input.candidates ?? [], {
     review_comments: input.review_comments,
+    reviewer_comments: input.reviewer_comments,
     files: input.files,
     title: input.title,
     body: input.pr_body,
@@ -256,28 +292,10 @@ export function applyCandidateDecision(outcome: LearnOutcome, candidates: Review
 export function maybePromoteFromCandidates(
   outcome: LearnOutcome,
   candidates: ReviewCandidate[],
-  context: PullRequestContext,
-  options?: { deterministic?: boolean },
+  _context: PullRequestContext,
+  _options?: { deterministic?: boolean },
 ): LearnOutcome {
   applyCandidateDecision(outcome, candidates);
-  if (outcome.action !== "no_op") return outcome;
-  if (options?.deterministic) return outcome;
-  const comments = context.reviewer_comments ?? [];
-  for (const comment of comments) {
-    if (!isPromotableQuality(comment.body)) continue;
-    const files = comment.path ? [comment.path] : evidenceFiles(context);
-    const matched = matchCandidate(comment.body, files, candidates, context.number);
-    if (!matched) continue;
-    const body = clampBody(toImperativeBody(comment.body));
-    return {
-      action: "promote",
-      candidate_id: matched.id,
-      title: firstLine(body),
-      kind: inferKind(body),
-      body,
-      reasoning: `Deterministic recurrence of ${matched.id} from ${matched.pr}`,
-    };
-  }
   return outcome;
 }
 
@@ -467,7 +485,7 @@ function planOne(
     const reviewer = matchingReviewer(context, matched, outcome.body);
     const id = generateMemoryId(usedIds);
     const title = outcome.title || firstLine(outcome.body || matched?.gist || "Untitled lesson");
-    const body = clampBody(toImperativeBody(outcome.body || title) || title);
+    const body = clampBody(outcome.body || title);
     const inferFiles = unique([
       ...(matched?.files ?? []),
       ...context.files,
@@ -564,14 +582,10 @@ export function matchingReviewer(
       });
     if (hit) return hit.author;
   }
+  if (comments.length === 1) return comments[0]!.author;
   return matched?.reviewer
-    || comments[0]?.author
     || context.author
     || "teamrecall";
-}
-
-function currentReviewer(context: PullRequestContext, matched?: ReviewCandidate): string {
-  return matchingReviewer(context, matched);
 }
 
 function planUpdate(
@@ -618,7 +632,7 @@ function planUpdate(
     },
     review_after: reviewAfterDate(created, ttlDays),
   };
-  const body = clampBody(toImperativeBody(outcome.body || target.body) || target.body);
+  const body = clampBody(outcome.body || target.body);
   return {
     outcome: { ...outcome, action: outcome.action === "promote" ? "update" : outcome.action, memory_id: target.frontmatter.id },
     mutations: [{ path: target.filepath, content: formatMemory(nextFrontmatter, body) }],

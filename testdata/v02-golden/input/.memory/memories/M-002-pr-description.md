@@ -5,7 +5,7 @@ paths: ["**/*"]
 evidence:
   pr: "#7"
 author: bob
-created: "2026-10-10"
+created: "2026-10-09"
 review_after: "2027-01-08"
 status: active
 ---

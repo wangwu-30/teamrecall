@@ -152,41 +152,51 @@ describe("generateDistillationPrompt", () => {
     expect(prompt).not.toMatch(/changeset|mdtest|vitest|biome|ruff|tldraw/i);
   });
 
-  it("sends only top-k candidates when 2000 exist", () => {
+  it("ranks a same-rule candidate into the shown set among 2000 noisy ones", () => {
+    const hit = 900;
+    const hitId = `C-${hit.toString(16).padStart(12, "0")}`;
     const candidates = Array.from({ length: 2000 }, (_, index) => ({
       id: `C-${index.toString(16).padStart(12, "0")}`,
-      gist: index === 7
-        ? "register retries only in the gateway wrapper"
+      gist: index === hit
+        ? "keep review comments short do not paste a whole function"
         : `unrelated nit number ${index} about a changelog entry`,
-      terms: index === 7
-        ? ["register", "retries", "gateway", "wrapper"]
+      terms: index === hit
+        ? ["keep", "short", "paste", "whole"]
         : ["unrelated", "changelog", `term${index}`],
-      files: index === 7 ? ["src/gateway.ts"] : [`docs/n${index}.md`],
+      files: index === hit
+        ? ["crates/ruff_linter/src/rules/a.rs"]
+        : [`docs/n${index}.md`],
       pr: `#${index}`,
       date: "2026-10-01",
       reviewer: "bob",
     }));
+    const shown = selectPromptCandidates(candidates, {
+      review_comments: ["Please keep review comments short — don't paste an entire function into the PR comment."],
+      reviewer_comments: [{
+        body: "Please keep review comments short — don't paste an entire function into the PR comment.",
+        path: "crates/ruff_linter/src/rules/a.rs",
+      }],
+      files: ["crates/ruff_linter/src/rules/b.rs"],
+    });
+    expect(shown.length).toBeLessThanOrEqual(CANDIDATE_PROMPT_K);
+    expect(shown.some((candidate) => candidate.id === hitId)).toBe(true);
+
     const prompt = generateDistillationPrompt({
       pr_number: "42",
-      diff: "diff --git a/src/gateway.ts",
-      pr_body: "Move retries to the gateway wrapper.",
-      review_comments: ["Register retries only in the gateway wrapper."],
+      diff: "diff --git a/crates/ruff_linter/src/rules/a.rs",
+      pr_body: "Tweak a lint.",
+      review_comments: ["Please keep review comments short — don't paste an entire function into the PR comment."],
       commit_messages: ["msg"],
       existing_memories: [],
       candidates,
-      files: ["src/gateway.ts"],
-      title: "Move retries to the gateway",
+      files: ["crates/ruff_linter/src/rules/a.rs"],
+      reviewer_comments: [{
+        body: "Please keep review comments short — don't paste an entire function into the PR comment.",
+        path: "crates/ruff_linter/src/rules/a.rs",
+      }],
     });
-    const listed = [...prompt.matchAll(/^- (C-[a-f0-9]{12}):/gm)];
-    expect(listed.length).toBeLessThanOrEqual(CANDIDATE_PROMPT_K);
-    expect(listed.length).toBeGreaterThan(0);
-    expect(prompt).toContain("C-000000000007");
+    expect(prompt).toContain(hitId);
     expect(prompt.length).toBeLessThan(80_000);
-    expect(selectPromptCandidates(candidates, {
-      review_comments: ["Register retries only in the gateway wrapper."],
-      files: ["src/gateway.ts"],
-      title: "Move retries to the gateway",
-    })).toHaveLength(CANDIDATE_PROMPT_K);
   });
 });
 
@@ -1398,6 +1408,38 @@ describe("recurrence promotion", () => {
       reasoning: "matched carol",
     }, [], ctx, "/tmp/project", 90, [], false, existing);
     expect(parseMemory(planned.mutations[0]?.content ?? "")?.frontmatter.author).toBe("carol");
+  });
+
+  it("does not deterministically promote when the LLM said no_op", () => {
+    const existing = [{
+      id: styleId,
+      gist: normalizeGist(styleComment),
+      terms: ["keep", "short", "paste"],
+      files: ["docs/guide.md"],
+      pr: "#10",
+      date: "2026-10-01",
+      reviewer: "bob",
+    }];
+    const outcome = maybePromoteFromCandidates(
+      { action: "no_op", reasoning: "LLM decided no-op" },
+      existing,
+      styleContext("22"),
+      { deterministic: false },
+    );
+    expect(outcome.action).toBe("no_op");
+  });
+
+  it("keeps LLM-written bodies with type parameters and URLs", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Prefer Box",
+      body: "Prefer `Box<T>` over `Rc<T>` in crates/ruff_linter. See https://example.test/rfc.",
+      paths: ["crates/ruff_linter/**"],
+      reasoning: "llm",
+    }, [], context({ reviewer_comments: [{ body: "Prefer Box<T> over Rc<T> in this crate.", author: "bob" }] }), "/tmp/project");
+    const content = planned.mutations[0]?.content ?? "";
+    expect(content).toContain("Box<T>");
+    expect(content).toContain("https://example.test/rfc");
   });
 
   it("does not apply the quality gate to an LLM promotion", () => {

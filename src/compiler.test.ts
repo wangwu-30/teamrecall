@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AGENTS_INDEX_MAX_LINES, CLAUDE_INDEX_IMPORT, TEAMRECALL_END, TEAMRECALL_START } from "./constants.js";
-import { compileMemories, generateAgentsMdBlock, writeCompiledFiles } from "./compiler.js";
+import { compileMemories, generateAgentsMdBlock, generateCompactIndex, rankMemoriesForIndex, writeCompiledFiles } from "./compiler.js";
 import type { Memory } from "./types.js";
 
 function memory(partial: Partial<Memory["frontmatter"]> & { id: string; body?: string; status?: Memory["frontmatter"]["status"] }): Memory {
@@ -222,7 +222,7 @@ describe("compileMemories", () => {
     expect(compiled.index_md).toContain("M-020");
   });
 
-  it("ranks the compact index by recency then evidence, not catalog id order", async () => {
+  it("keeps v0.3.0 catalog order in AGENTS.md by default; recency rank is opt-in", async () => {
     const memories = [
       memory({
         id: "M-001",
@@ -240,10 +240,10 @@ describe("compileMemories", () => {
       }),
     ];
     const compiled = await compileMemories("/tmp", memories);
-    const firstTriggered = compiled.agents_md.indexOf("M-020");
-    const later = compiled.agents_md.indexOf("M-001");
-    expect(firstTriggered).toBeGreaterThan(-1);
-    expect(later).toBeGreaterThan(firstTriggered);
+    expect(compiled.agents_md.indexOf("M-001")).toBeLessThan(compiled.agents_md.indexOf("M-020"));
+
+    const ranked = generateCompactIndex(rankMemoriesForIndex(memories));
+    expect(ranked.indexOf("M-020")).toBeLessThan(ranked.indexOf("M-001"));
   });
 });
 

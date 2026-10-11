@@ -134,6 +134,7 @@ describe("runRetrieve", () => {
       files: ["src/gateway.ts"],
       k: 20,
     });
+    expect(result.k).toBe(10);
     expect(result.matched.length).toBeLessThanOrEqual(10);
     expect(result.always.length).toBeLessThanOrEqual(8);
     expect(result.memories.length).toBeLessThanOrEqual(18);

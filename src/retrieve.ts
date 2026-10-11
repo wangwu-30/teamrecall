@@ -250,6 +250,7 @@ function scoreMemories(
 export async function runRetrieve(input: RetrieveInput): Promise<RetrieveResult> {
   const memories = (input.memories ?? (input.projectDir ? await loadMemories(input.projectDir) : []))
     .filter((memory) => memory.frontmatter.status === "active");
+  // Triggered memories are clamped to COMPILE_TRIGGERED_CAP (10) per query.
   const k = Math.min(input.k ?? DEFAULT_RETRIEVE_K, COMPILE_TRIGGERED_CAP);
   let alwaysCap = input.alwaysCap;
   if (alwaysCap === undefined && input.projectDir) {

@@ -87,11 +87,22 @@ export function commentWordCount(text: string): number {
 export function isLowSignalComment(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return true;
-  if (isLinkOnlyComment(trimmed)) return true;
   if (isThanksComment(trimmed)) return true;
   if (isClosingOrReopenComment(trimmed)) return true;
+  if (hasCodeOrIdentifier(trimmed)) return false;
+  if (isLinkOnlyComment(trimmed)) return true;
   if (commentWordCount(trimmed) < 5) return true;
   return false;
+}
+
+export function hasCodeOrIdentifier(text: string): boolean {
+  return /`[^`]+`/.test(text)
+    || /\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]+)+\b/.test(text)
+    || /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/.test(text)
+    || /(?:^|[^\w])[A-Za-z_][\w]*\(/.test(text)
+    || /\b[\w.-]+\.(?:rs|ts|tsx|js|jsx|py|go|md|toml|json|css)\b/.test(text)
+    || /::/.test(text)
+    || /<[A-Za-z_][^>\s]*>/.test(text);
 }
 
 export function isEligibleReviewerComment(comment: AuthoredComment, prAuthor: string): boolean {

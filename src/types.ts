@@ -37,14 +37,11 @@ export interface Memory {
   filepath: string;
 }
 
-export type CandidatesStore = "state_branch" | "actions_cache";
-
 export interface TeamRecallConfig {
   max_active_memories: number;
   review_ttl_days: number;
   distillation_model?: string;
   retrieve_always_cap?: number;
-  candidates_store?: CandidatesStore;
   experimental?: {
     retrieval?: boolean;
   };

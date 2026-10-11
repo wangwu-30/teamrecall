@@ -87,7 +87,7 @@ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
 
 Zero-secret mode **does not write memories from review comments**. If `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are both unset, `trc learn` only records recurrence candidates and compiles existing hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI, or one of those API keys).
 
-Candidate gists live on the `teamrecall/state` branch by default. On a public repo that branch is public. To keep gists out of git, set `candidates_store: actions_cache` in `.memory/config.yml` (Actions cache, collaborators only).
+Candidate gists live on the `teamrecall/state` branch. On a public repo that branch is public. There is no Actions-cache store — `pull_request` caches do not accumulate across PRs.
 
 After the human runs the secret command and flips the setting, verify:
 

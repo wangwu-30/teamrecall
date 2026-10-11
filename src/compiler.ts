@@ -20,8 +20,7 @@ export async function compileMemories(
     .filter((memory) => memory.frontmatter.status === "active")
     .slice(0, MAX_ACTIVE_MEMORIES);
   const abandonedMemories = memories.filter((memory) => memory.frontmatter.status === "abandoned");
-  const ranked = rankMemoriesForIndex(catalog);
-  const compact = generateCompactIndex(ranked, abandonedMemories);
+  const compact = generateCompactIndex(catalog, abandonedMemories);
 
   return {
     agents_md: compact,
@@ -37,7 +36,7 @@ export function evidenceCount(memory: Memory): number {
     ?? (memory.frontmatter.evidence.pr ? 1 : 0);
 }
 
-/** Static compile ranking: recency, then evidence count. Retrieve applies the per-query cap. */
+/** Opt-in ranking (recency, then evidence). Default compile keeps v0.3.0 catalog/id order. */
 export function rankMemoriesForIndex(active: Memory[]): Memory[] {
   const byRank = (left: Memory, right: Memory): number => {
     const created = (right.frontmatter.created ?? "").localeCompare(left.frontmatter.created ?? "");
@@ -146,7 +145,7 @@ export function generateCompactIndex(active: Memory[], abandoned: Memory[] = [])
 }
 
 export function generateAgentsMdBlock(memories: Memory[]): string {
-  const active = rankMemoriesForIndex(memories.filter((memory) => memory.frontmatter.status === "active"));
+  const active = memories.filter((memory) => memory.frontmatter.status === "active");
   const abandoned = memories.filter((memory) => memory.frontmatter.status === "abandoned");
   return generateCompactIndex(active, abandoned);
 }

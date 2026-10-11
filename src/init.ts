@@ -108,7 +108,6 @@ export async function initProject(projectDir: string, options: InitOptions = {})
     const config: TeamRecallConfig = {
       max_active_memories: MAX_ACTIVE_MEMORIES,
       review_ttl_days: DEFAULT_TTL_DAYS,
-      candidates_store: "state_branch",
     };
     await ensureWritten(path.join(memoryDir, "config.yml"), YAML.stringify(config), created, skipped);
     await ensureWritten(path.join(memoryDir, "README.md"), memoryReadme(), created, skipped);
@@ -252,8 +251,8 @@ This directory stores team knowledge captured from code review.
 - \`retired/\` — Retired memories
 - Active/abandoned/superseded files stay in \`memories/\` (\`superseded\` needs \`superseded_by\`)
 - \`INDEX.md\` — Compiled index (auto-generated)
-- \`candidates.jsonl\` — Recurrence gists (never compiled). Default store is the \`teamrecall/state\` branch, which is **public on public repos**. Set \`candidates_store: actions_cache\` in \`config.yml\` to keep them in Actions cache instead.
-- \`config.yml\` — Configuration (\`candidates_store: state_branch | actions_cache\`)
+- \`candidates.jsonl\` — Recurrence gists (never compiled). Stored on the \`teamrecall/state\` branch, which is **public on public repos**.
+- \`config.yml\` — Configuration
 
 ## Memory Format
 
