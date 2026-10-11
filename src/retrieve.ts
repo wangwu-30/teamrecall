@@ -6,8 +6,6 @@ export const DEFAULT_RETRIEVE_K = 5;
 export const DEFAULT_ALWAYS_CAP = 8;
 export const PATH_BOOST = 8;
 export const TRIGGER_CONTAINS_BOOST = 4;
-const MAX_CONTAINS_PATTERN = 80;
-const MAX_CONTAINS_HAYSTACK = 50_000;
 
 const STOP = new Set([
   "the", "a", "an", "and", "or", "to", "of", "in", "for", "on", "with",
@@ -69,33 +67,10 @@ export function addedLinesFromDiff(diff: string): string[] {
   return lines;
 }
 
-function dangerousRegex(source: string): boolean {
-  return source.length > MAX_CONTAINS_PATTERN
-    || /[*+]{2,}|\{\d{3,}/.test(source)
-    || /(\.\*){2,}/.test(source);
-}
-
 export function matchContains(needle: string, haystack: string): boolean {
   const trimmed = needle.trim();
   if (!trimmed) return false;
-  const hay = haystack.length > MAX_CONTAINS_HAYSTACK
-    ? haystack.slice(0, MAX_CONTAINS_HAYSTACK)
-    : haystack;
-  const wrapped = trimmed.match(/^\/([\s\S]+)\/([a-z]*)$/);
-  if (!wrapped) {
-    return hay.toLowerCase().includes(trimmed.toLowerCase());
-  }
-  const source = wrapped[1];
-  const flags = wrapped[2] ?? "";
-  if (dangerousRegex(source)) {
-    return hay.toLowerCase().includes(source.toLowerCase());
-  }
-  try {
-    const re = new RegExp(source, flags.includes("i") ? flags : `${flags}i`);
-    return re.test(hay);
-  } catch {
-    return hay.toLowerCase().includes(source.toLowerCase());
-  }
+  return haystack.toLowerCase().includes(trimmed.toLowerCase());
 }
 
 export function globHits(glob: string, files: string[]): boolean {
@@ -148,9 +123,17 @@ export function triggerMatches(
   return true;
 }
 
+function isRepoWideGlob(glob: string): boolean {
+  const normalized = glob.replaceAll("\\", "/").replace(/\/$/, "");
+  return normalized === "**" || normalized === "**/*" || normalized === "*";
+}
+
 export function pathMatches(memory: Memory, files: string[]): boolean {
-  if (memory.frontmatter.paths.some((glob) => globHits(glob, files))) return true;
-  return Boolean(memory.frontmatter.triggers?.some((trigger) => globHits(trigger.glob, files)));
+  const globs = [
+    ...memory.frontmatter.paths,
+    ...(memory.frontmatter.triggers ?? []).map((trigger) => trigger.glob),
+  ].filter((glob) => glob && !isRepoWideGlob(glob));
+  return globs.some((glob) => files.some((file) => globMatches(glob, file)));
 }
 
 export function triggerContainsMatches(
@@ -186,7 +169,7 @@ export function bm25Scores(queryTokens: string[], documents: string[][]): number
     for (const token of seen) df.set(token, (df.get(token) ?? 0) + 1);
   }
   const query = new Map<string, number>();
-  for (const token of queryTokens) query.set(token, (query.get(token) ?? 0) + 1);
+  for (const token of new Set(queryTokens)) query.set(token, 1);
 
   return documents.map((doc, index) => {
     const tf = new Map<string, number>();
@@ -226,21 +209,23 @@ function scoreMemories(
   input: RetrieveInput,
   alwaysReason: boolean,
 ): RetrievedMemory[] {
-  const scores = bm25Scores(query, memories.map(documentTokens));
+  const raw = bm25Scores(query, memories.map(documentTokens));
+  const max = Math.max(0, ...raw);
   return memories.map((memory, index) => {
-    let score = scores[index] ?? 0;
+    const bm25 = max > 0 ? (raw[index] ?? 0) / max : 0;
+    let tier = 0;
     let reason: RetrievedMemory["reason"] = alwaysReason ? "always" : "bm25";
     if (!alwaysReason) {
       if (pathMatches(memory, input.files)) {
-        score += PATH_BOOST;
+        tier = 1;
         reason = "glob";
       }
       if (triggerContainsMatches(memory, input)) {
-        score += TRIGGER_CONTAINS_BOOST;
+        tier = 2;
         reason = "trigger";
       }
     }
-    return toRetrieved(memory, score, reason);
+    return toRetrieved(memory, tier + bm25, reason);
   }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 }
 

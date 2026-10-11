@@ -5,10 +5,11 @@ import {
   distinctiveTerms,
   formatRetrieveText,
   matchContains,
-  PATH_BOOST,
+  pathMatches,
   runRetrieve,
   tokenize,
   triggerMatches,
+  bm25Scores,
 } from "./retrieve.js";
 
 function memory(partial: {
@@ -82,7 +83,7 @@ describe("runRetrieve", () => {
     expect(ids).toContain("M-002");
     expect(result.always.map((item) => item.id)).toEqual(["M-002"]);
     expect(result.matched[0]?.id).toBe("M-001");
-    expect(result.matched[0]?.score).toBeGreaterThanOrEqual(PATH_BOOST);
+    expect(result.matched[0]?.reason).toBe("glob");
     expect(result.always_cap).toBe(8);
     expect(formatRetrieveText(result)).toMatch(/Always:[\s\S]*M-002/);
     expect(formatRetrieveText(result)).toMatch(/Retrieved:[\s\S]*M-001/);
@@ -142,11 +143,47 @@ describe("trigger / contains / tokens / pr signals", () => {
     )).toBe(true);
   });
 
-  it("treats plain contains as a literal unless /regex/ form", () => {
+  it("treats contains as a literal substring and never runs regex", () => {
     expect(matchContains("a+b", "a+b")).toBe(true);
     expect(matchContains("foo(", "foo(bar")).toBe(true);
-    expect(matchContains("/a\\+b/", "a+b")).toBe(true);
-    expect(matchContains("/foo\\(/", "foo(bar")).toBe(true);
+    expect(matchContains("/(a+)+$/", `${"a".repeat(28)}!`)).toBe(false);
+    const started = Date.now();
+    matchContains("/(a+)+$/", `${"a".repeat(28)}!`);
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+
+  it("saturates BM25 query frequency so a repeated term cannot swamp path rank", () => {
+    const score = bm25Scores(Array(300).fill("mdtest"), [["mdtest"], ["other"]])[0];
+    expect(score).toBeLessThan(2);
+  });
+
+  it("ranks path matches above high BM25 non-matches", async () => {
+    const pathHit = memory({
+      id: "M-001",
+      scope: "triggered",
+      paths: [".changeset/*.md"],
+      body: "Every user-facing change needs a changeset file under .changeset.",
+    });
+    const noisy = memory({
+      id: "M-009",
+      scope: "triggered",
+      paths: ["docs/**"],
+      body: `${"formatter ".repeat(80)}unrelated docs note`,
+    });
+    const result = await runRetrieve({
+      memories: [pathHit, noisy],
+      files: [".changeset/a.md"],
+      title: "formatter formatter formatter",
+      body: "formatter ".repeat(40),
+      k: 2,
+    });
+    expect(result.matched[0]?.id).toBe("M-001");
+    expect(result.matched[0]?.reason).toBe("glob");
+  });
+
+  it("does not treat empty or ** paths as a path match", () => {
+    expect(pathMatches(memory({ id: "M-008", body: "x", paths: [] }), ["anything/x.rs"])).toBe(false);
+    expect(pathMatches(memory({ id: "M-008", body: "x", paths: ["**/*"] }), ["anything/x.rs"])).toBe(false);
   });
 
   it("tokenizes dotted path terms the same way as queries", () => {

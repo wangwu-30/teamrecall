@@ -265,7 +265,7 @@ paths: [".changeset/*.md"]
 scope: always|triggered
 triggers:
   - glob: ".changeset/*.md"
-    contains: optional regex/term on added diff lines
+    contains: optional literal substring on added diff lines
     pr: optional title/body/size signal
 evidence:
   pr: "#42"

@@ -98,14 +98,13 @@ A memory must have:
 3. Broader applicability beyond this specific PR
 
 You own where the rule applies. Output \`applies_to\` globs for the *rule*, not the file the comment happened to sit on.
-Examples: \`**/*.test.ts\`, \`.changeset/*.md\`, \`packages/foo/**\`, \`src/**\`, \`test/**\`.
-Package-level \`dir/**\` globs are fine. Keep dot-directories. Do not copy an exact evidence filename unless that file *is* the rule.
+Generic examples: \`src/auth/**\`, \`docs/**\`, \`**/*.css\`. Keep dot-directories. Do not copy an exact evidence filename unless that file *is* the rule.
 
-Always set \`scope\` explicitly:
-- \`always\` for path-independent PR process / style / comments / description rules (AI disclosure, linked issue, one-topic PRs, verbose comments)
-- \`triggered\` when the rule applies only to specific files
+Always set \`scope\` explicitly (do not leave it for the heuristic):
+- \`always\` — the rule is about the PR itself (description, process, style) and should be in the root index
+- \`triggered\` — the rule applies only under \`applies_to\`
 
-Set \`triggers\` as machine-checkable conditions: glob AND optional \`contains\` (literal term, or /regex/ form, on added diff lines) AND optional \`pr\` (\`title:\` / \`body:\` / \`size:\` / \`files:>=N\`).
+Set \`triggers\` as machine-checkable conditions: glob AND optional \`contains\` (literal substring on added diff lines) AND optional \`pr\` (\`title:\` / \`body:\` / \`size:\` / \`files:>=N\`).
 
 Choose ONE outcome (respond with ONLY the JSON, no other text):
 
@@ -115,10 +114,10 @@ Choose ONE outcome (respond with ONLY the JSON, no other text):
   "memory_id": "M-xxx (if reuse/update/merge/propose_retire)",
   "title": "Short title (if new/update)",
   "kind": "gotcha|decision|convention|map (if new)",
-  "applies_to": ["**/*.test.ts"],
+  "applies_to": ["src/auth/**"],
   "paths": ["alias of applies_to if you prefer"],
   "scope": "always|triggered",
-  "triggers": [{"glob": ".changeset/*.md", "contains": "optional", "pr": "title:changeset"}],
+  "triggers": [{"glob": "src/auth/**", "contains": "optional", "pr": "title:auth"}],
   "body": "≤120 words: trigger and decision change (if new/update)",
   "reasoning": "Why this action",
   "contradicts": false,
@@ -514,6 +513,9 @@ export function globCoverage(glob: string, files: string[]): number {
   return files.filter((file) => globMatches(glob, file)).length / files.length;
 }
 
+export const MAX_INFER_PATH_GLOBS = 5;
+const WORKSPACE_ROOTS = new Set(["packages", "crates", "apps"]);
+
 function deepestCommonDir(files: string[]): string {
   const parts = files.map((file) => file.split("/").slice(0, -1));
   if (parts.length === 0) return "";
@@ -527,21 +529,69 @@ function deepestCommonDir(files: string[]): string {
   return prefix.join("/");
 }
 
+function isTooShallow(dir: string): boolean {
+  if (!dir) return true;
+  const parts = dir.split("/").filter(Boolean);
+  return Boolean(WORKSPACE_ROOTS.has(parts[0] ?? "") && parts.length < 2);
+}
+
+function packageDir(file: string): string {
+  const parts = file.split("/");
+  const dirs = parts.slice(0, -1);
+  if (dirs.length === 0) return "";
+  if (WORKSPACE_ROOTS.has(dirs[0] ?? "") && dirs.length >= 2) return `${dirs[0]}/${dirs[1]}`;
+  return dirs.join("/");
+}
+
 function extensionOf(file: string): string {
   const slash = file.lastIndexOf("/");
   const dot = file.lastIndexOf(".");
   return dot > slash ? file.slice(dot) : "";
 }
 
-function addDirGlobs(globs: string[], dir: string, files: string[]): void {
-  globs.push(`${dir}/**`);
-  const exts = unique(files.map(extensionOf).filter(Boolean));
-  for (const ext of exts) globs.push(`${dir}/**/*${ext}`);
+interface PathGroup {
+  dir: string;
+  files: string[];
+}
+
+function mergeGroups(groups: PathGroup[], max: number): PathGroup[] {
+  let next = [...groups];
+  while (next.length > max) {
+    let bestI = -1;
+    let bestJ = -1;
+    let bestDir = "";
+    let bestDepth = -1;
+    for (let i = 0; i < next.length; i++) {
+      for (let j = i + 1; j < next.length; j++) {
+        const ancestor = deepestCommonDir([...next[i]!.files, ...next[j]!.files]);
+        if (!ancestor || isTooShallow(ancestor)) continue;
+        const depth = ancestor.split("/").length;
+        if (depth > bestDepth) {
+          bestDepth = depth;
+          bestI = i;
+          bestJ = j;
+          bestDir = ancestor;
+        }
+      }
+    }
+    if (bestI < 0) {
+      next.sort((a, b) => b.files.length - a.files.length || a.dir.localeCompare(b.dir));
+      next = next.slice(0, max);
+      break;
+    }
+    const merged: PathGroup = {
+      dir: bestDir,
+      files: [...next[bestI]!.files, ...next[bestJ]!.files],
+    };
+    next = next.filter((_, index) => index !== bestI && index !== bestJ);
+    next.push(merged);
+  }
+  return next;
 }
 
 export function inferPaths(files: string[]): string[] {
   const normalized = unique(files.map((item) => item.replaceAll("\\", "/")).filter(Boolean));
-  if (normalized.length === 0) return ["**/*"];
+  if (normalized.length === 0) return [];
 
   const globs: string[] = [];
   const nested: string[] = [];
@@ -549,23 +599,33 @@ export function inferPaths(files: string[]): string[] {
     if (file.includes("/")) nested.push(file);
     else globs.push(file);
   }
-  if (nested.length === 0) return unique(globs);
 
-  const common = deepestCommonDir(nested);
-  if (common) {
-    addDirGlobs(globs, common, nested);
-    return unique(globs);
+  if (nested.length > 0) {
+    const common = deepestCommonDir(nested);
+    const groups: PathGroup[] = [];
+    if (common && !isTooShallow(common)) {
+      groups.push({ dir: common, files: nested });
+    } else {
+      const byPackage = new Map<string, string[]>();
+      for (const file of nested) {
+        const dir = packageDir(file);
+        if (!dir) continue;
+        const group = byPackage.get(dir) ?? [];
+        group.push(file);
+        byPackage.set(dir, group);
+      }
+      for (const [dir, groupFiles] of byPackage) groups.push({ dir, files: groupFiles });
+    }
+    const capped = mergeGroups(groups, Math.max(1, MAX_INFER_PATH_GLOBS - globs.length));
+    for (const group of capped) globs.push(`${group.dir}/**`);
+    for (const group of capped) {
+      if (globs.length >= MAX_INFER_PATH_GLOBS) break;
+      const exts = unique(group.files.map(extensionOf).filter(Boolean));
+      if (exts.length === 1) globs.push(`${group.dir}/**/*${exts[0]}`);
+    }
   }
 
-  const byParent = new Map<string, string[]>();
-  for (const file of nested) {
-    const parent = file.slice(0, file.lastIndexOf("/"));
-    const group = byParent.get(parent) ?? [];
-    group.push(file);
-    byParent.set(parent, group);
-  }
-  for (const [parent, group] of byParent) addDirGlobs(globs, parent, group);
-  return unique(globs);
+  return unique(globs).slice(0, MAX_INFER_PATH_GLOBS);
 }
 
 export function keepSpecificPaths(
@@ -576,13 +636,20 @@ export function keepSpecificPaths(
   const candidates = unique((proposed ?? []).map((glob) => glob.replaceAll("\\", "/")));
   if (candidates.length === 0) return inferPaths(evidence);
   const universe = unique([...tracked, ...evidence]);
-  const kept = candidates.filter((glob) => {
-    if (universe.length === 0) return true;
-    if (!universe.some((file) => globMatches(glob, file))) return false;
-    if (isRepoWideGlob(glob) && globCoverage(glob, universe) > 0.8) return false;
-    return true;
-  });
-  return kept.length > 0 ? kept : inferPaths(evidence);
+  const specific: string[] = [];
+  let sawRepoWide = false;
+  for (const glob of candidates) {
+    if (isRepoWideGlob(glob)) {
+      sawRepoWide = true;
+      continue;
+    }
+    if (universe.length === 0 || universe.some((file) => globMatches(glob, file))) {
+      specific.push(glob);
+    }
+  }
+  if (specific.length > 0) return specific;
+  if (sawRepoWide) return ["**"];
+  return inferPaths(evidence);
 }
 
 function summarizeAction(outcomes: LearnOutcome[]): LearnOutcome["action"] {

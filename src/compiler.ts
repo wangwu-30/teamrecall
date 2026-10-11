@@ -174,7 +174,7 @@ function generateCursorRules(memories: Memory[]): Map<string, string> {
     const title = extractTitle(memory.body);
     const scope = memoryScope(memory);
     const paths = memory.frontmatter.paths;
-    const always = scope === "always" || paths.length === 0;
+    const always = scope === "always";
     const frontmatter = always
       ? [
           "---",

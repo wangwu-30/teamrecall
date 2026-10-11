@@ -14,14 +14,7 @@ const DEFAULT_CONFIG: TeamRecallConfig = {
 const KINDS: MemoryKind[] = ["gotcha", "decision", "convention", "map"];
 const STATUSES: MemoryStatus[] = ["active", "retired", "superseded", "abandoned"];
 const SCOPES: MemoryScope[] = ["always", "triggered"];
-const PROCESS_STYLE = [
-  /\b(ai|artificial intelligence)\b.{0,24}\b(disclos|usage|used|generated|wrote)\b/i,
-  /\bdisclos\w*.{0,24}\b(ai|artificial intelligence)\b/i,
-  /\b(linked? issues?|open an? issue|issue first|associate[d]? an? issue)\b/i,
-  /\b(single[- ]topic|one[- ]topic|keep prs? scoped|scoped prs?|prs? (are )?scoped)\b/i,
-  /\b(over[- ]explained|no narration|brief comments|keep comments (short|brief)|comments? (too )?(long|short|verbose)|verbose comments?)\b/i,
-  /\b(pr description|pull request description|explain why)\b/i,
-];
+const PROCESS_STYLE = /\b(pr description|pull request description|commit message|changelog)\b/i;
 
 export async function loadConfig(projectDir: string): Promise<TeamRecallConfig> {
   const configPath = path.join(projectDir, ".memory", "config.yml");
@@ -105,7 +98,7 @@ export function isValidTrigger(value: unknown): value is MemoryTrigger {
 }
 
 export function defaultScope(paths: string[], body: string): MemoryScope {
-  if (PROCESS_STYLE.some((pattern) => pattern.test(body)) || isBroadPaths(paths)) return "always";
+  if (isBroadPaths(paths) || PROCESS_STYLE.test(body)) return "always";
   return "triggered";
 }
 
@@ -114,7 +107,7 @@ export function memoryScope(memory: Memory): MemoryScope {
 }
 
 export function isBroadPaths(paths: string[]): boolean {
-  if (paths.length === 0) return true;
+  if (paths.length === 0) return false;
   return paths.every((glob) => glob === "**" || glob === "**/*" || glob === "*");
 }
 

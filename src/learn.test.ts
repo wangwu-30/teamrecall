@@ -115,11 +115,12 @@ describe("generateDistillationPrompt", () => {
     });
     expect(prompt).toContain("M-001");
     expect(prompt).toContain("no_op");
-    expect(prompt).toContain(".changeset/*.md");
     expect(prompt).toContain("applies_to");
     expect(prompt).toContain('"scope": "always|triggered"');
     expect(prompt).toContain("triggers");
-    expect(prompt).toContain("**/*.test.ts");
+    expect(prompt).toContain("src/auth/**");
+    expect(prompt).toContain("docs/**");
+    expect(prompt).not.toMatch(/changeset|mdtest|vitest|biome|ruff|tldraw/i);
   });
 });
 
@@ -129,28 +130,48 @@ describe("inferPaths", () => {
     expect(globs).toContain(".changeset/**");
     expect(globs).toContain(".changeset/**/*.md");
     expect(globs).not.toContain(".changeset/*");
-    expect(globs.some((glob) => glob.startsWith("crates/") || glob.startsWith("packages/"))).toBe(false);
   });
 
-  it("uses the deepest common directory across evidence files", () => {
-    const globs = inferPaths([
+  it("uses the deepest common dir but never shallower than the package dir", () => {
+    expect(inferPaths([
+      "crates/ruff_linter/src/rules/a.rs",
+      "crates/ruff_linter/resources/mdtest/b.md",
+    ])).toEqual(["crates/ruff_linter/**"]);
+  });
+
+  it("does not collapse a monorepo to crates/** or packages/**", () => {
+    expect(inferPaths([
+      "crates/biome_service/src/a.rs",
+      "crates/biome_languages/src/b.rs",
+    ])).toEqual(expect.arrayContaining([
+      "crates/biome_service/**",
+      "crates/biome_languages/**",
+    ]));
+    expect(inferPaths([
+      "crates/biome_service/src/a.rs",
+      "crates/biome_languages/src/b.rs",
+    ])).not.toContain("crates/**");
+    expect(inferPaths([
       "packages/vitest/src/node/cli.ts",
       "packages/browser/src/client.ts",
-    ]);
-    expect(globs).toContain("packages/**");
-    expect(globs).toContain("packages/**/*.ts");
-  });
-
-  it("considers every evidence file and does not emit root *.md", () => {
-    const globs = inferPaths(["a/b/c.ts", "d/e/f.ts", "g/h/i.ts", "j/k/l.ts"]);
-    expect(globs).toEqual(expect.arrayContaining([
-      "a/b/**", "d/e/**", "g/h/**", "j/k/**",
-      "a/b/**/*.ts", "d/e/**/*.ts", "g/h/**/*.ts", "j/k/**/*.ts",
+    ])).toEqual(expect.arrayContaining([
+      "packages/vitest/**",
+      "packages/browser/**",
     ]));
-    expect(inferPaths(["README.md"])).toEqual(["README.md"]);
+    expect(inferPaths([
+      "packages/vitest/src/node/cli.ts",
+      "packages/browser/src/client.ts",
+    ])).not.toContain("packages/**");
   });
 
-  it("keeps package-level applies_to globs and only rejects repo-wide >80% coverage", () => {
+  it("caps inferred globs and leaves root files exact", () => {
+    const many = inferPaths(Array.from({ length: 12 }, (_, i) => `d${i}/x/f${i}.ts`).concat(["README.md"]));
+    expect(many.length).toBeLessThanOrEqual(5);
+    expect(inferPaths(["README.md"])).toEqual(["README.md"]);
+    expect(inferPaths([])).toEqual([]);
+  });
+
+  it("keeps package-level applies_to and explicit repo-wide **", () => {
     expect(keepSpecificPaths(
       [".changeset/*.md"],
       [".changeset/loose-hats-cough.md", "crates/foo.rs"],
@@ -162,15 +183,15 @@ describe("inferPaths", () => {
       ["src/a.ts"],
     )).toEqual(["src/**"]);
     expect(keepSpecificPaths(
-      ["packages/**"],
-      ["packages/a/src/x.ts", "docs/readme.md"],
-      ["packages/a/src/x.ts"],
-    )).toEqual(["packages/**"]);
+      ["**"],
+      ["a/x.ts", "b/y.ts", "c/z.ts"],
+      ["a/x.ts"],
+    )).toEqual(["**"]);
     expect(keepSpecificPaths(
       ["**/*"],
-      ["src/a.ts", "src/b.ts", "docs/c.md"],
-      ["src/a.ts"],
-    )).toContain("src/**");
+      ["a/x.ts", "b/y.ts"],
+      ["a/x.ts"],
+    )).toEqual(["**"]);
   });
 });
 
@@ -206,6 +227,19 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     }, existing);
     expect(forced.action).toBe("update");
     expect(forced.memory_id).toBe("M-012");
+  });
+
+  it("keeps explicit ** as repo-wide always instead of narrowing to evidence", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Process rule",
+      body: "Mention the change in every PR.",
+      paths: ["**"],
+      reasoning: "repo-wide process",
+    }, [], context({ files: ["a/x.ts"], evidence_files: ["a/x.ts"] }), "/tmp/project");
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.paths).toEqual(["**"]);
+    expect(parsed?.frontmatter.scope).toBe("always");
   });
 
   it("plans a new memory file and caps writes at 3", () => {
