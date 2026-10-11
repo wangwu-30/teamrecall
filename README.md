@@ -110,7 +110,7 @@ No manual wiki updates. No asking around. Just works.
 Follow https://github.com/wangwu-30/teamrecall/blob/main/INSTALL.md to set up teamrecall in this repo
 ```
 
-The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y github:wangwu-30/teamrecall#v0.3.0 init --yes --json`, backfills, compiles, runs `doctor`, and opens the first PR. Re-run is safe. Zero-secret mode only collects recurrence candidates and compiles existing hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI or `CLAUDE_CODE_OAUTH_TOKEN`).
+The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y github:wangwu-30/teamrecall#<latest-tag> init --yes --json` (latest release tag, currently `v0.3.0`), backfills, compiles, runs `doctor`, and opens the first PR. Re-run is safe. Zero-secret mode only collects recurrence candidates and compiles existing hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI or `CLAUDE_CODE_OAUTH_TOKEN`).
 
 **Or run it yourself:**
 
