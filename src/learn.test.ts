@@ -91,6 +91,12 @@ describe("parseDistillationResponse", () => {
     expect(parsed.paths).toEqual(["src/gateway/**"]);
   });
 
+  it("maps applies_to onto paths", () => {
+    const parsed = parseDistillationResponse(`{"action":"new","reasoning":"x","applies_to":["**/*.test.ts"],"scope":"triggered"}`);
+    expect(parsed.paths).toEqual(["**/*.test.ts"]);
+    expect(parsed.scope).toBe("triggered");
+  });
+
   it("returns no_op for invalid JSON or unknown action", () => {
     expect(parseDistillationResponse("not json").action).toBe("no_op");
     expect(parseDistillationResponse('{"action":"explode","reasoning":"x"}').action).toBe("no_op");
@@ -110,42 +116,61 @@ describe("generateDistillationPrompt", () => {
     expect(prompt).toContain("M-001");
     expect(prompt).toContain("no_op");
     expect(prompt).toContain(".changeset/*.md");
+    expect(prompt).toContain("applies_to");
     expect(prompt).toContain('"scope": "always|triggered"');
     expect(prompt).toContain("triggers");
-    expect(prompt).toMatch(/Never collapse.*packages\/\*\*\/\*/);
+    expect(prompt).toContain("**/*.test.ts");
   });
 });
 
 describe("inferPaths", () => {
-  it("keeps dot-directories and emits file / parent / extension globs", () => {
+  it("uses deepest common dir/** plus extension, keeps dot-directories", () => {
     const globs = inferPaths([".changeset/loose-hats-cough.md"]);
-    expect(globs).toContain(".changeset/loose-hats-cough.md");
-    expect(globs).toContain(".changeset/*");
-    expect(globs).toContain(".changeset/*.md");
+    expect(globs).toContain(".changeset/**");
+    expect(globs).toContain(".changeset/**/*.md");
+    expect(globs).not.toContain(".changeset/*");
     expect(globs.some((glob) => glob.startsWith("crates/") || glob.startsWith("packages/"))).toBe(false);
   });
 
-  it("does not collapse a monorepo to packages/**/*", () => {
+  it("uses the deepest common directory across evidence files", () => {
     const globs = inferPaths([
       "packages/vitest/src/node/cli.ts",
       "packages/browser/src/client.ts",
     ]);
-    expect(globs).not.toContain("packages/**/*");
-    expect(globs).toContain("packages/vitest/src/node/*.ts");
-    expect(globs).toContain("packages/browser/src/*.ts");
+    expect(globs).toContain("packages/**");
+    expect(globs).toContain("packages/**/*.ts");
   });
 
-  it("keeps distiller paths that match tracked files and drops overly-broad top-level globs", () => {
+  it("considers every evidence file and does not emit root *.md", () => {
+    const globs = inferPaths(["a/b/c.ts", "d/e/f.ts", "g/h/i.ts", "j/k/l.ts"]);
+    expect(globs).toEqual(expect.arrayContaining([
+      "a/b/**", "d/e/**", "g/h/**", "j/k/**",
+      "a/b/**/*.ts", "d/e/**/*.ts", "g/h/**/*.ts", "j/k/**/*.ts",
+    ]));
+    expect(inferPaths(["README.md"])).toEqual(["README.md"]);
+  });
+
+  it("keeps package-level applies_to globs and only rejects repo-wide >80% coverage", () => {
     expect(keepSpecificPaths(
       [".changeset/*.md"],
       [".changeset/loose-hats-cough.md", "crates/foo.rs"],
       [".changeset/loose-hats-cough.md"],
     )).toEqual([".changeset/*.md"]);
     expect(keepSpecificPaths(
-      ["packages/**/*"],
+      ["src/**"],
+      ["src/a.ts", "src/b/c.ts"],
+      ["src/a.ts"],
+    )).toEqual(["src/**"]);
+    expect(keepSpecificPaths(
+      ["packages/**"],
+      ["packages/a/src/x.ts", "docs/readme.md"],
       ["packages/a/src/x.ts"],
-      ["packages/a/src/x.ts"],
-    )).toContain("packages/a/src/*.ts");
+    )).toEqual(["packages/**"]);
+    expect(keepSpecificPaths(
+      ["**/*"],
+      ["src/a.ts", "src/b.ts", "docs/c.md"],
+      ["src/a.ts"],
+    )).toContain("src/**");
   });
 });
 

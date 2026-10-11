@@ -97,15 +97,15 @@ A memory must have:
 2. Decision it changes (not just facts)
 3. Broader applicability beyond this specific PR
 
-Paths must be specific. Record the files / directories the review comments actually touched.
-Prefer a file, then its parent directory, then an extension pattern such as \`.changeset/*.md\`.
-Keep dot-directories (\`.changeset\`, \`.github\`). Never collapse a monorepo to \`packages/**/*\` or \`crates/**/*\`.
+You own where the rule applies. Output \`applies_to\` globs for the *rule*, not the file the comment happened to sit on.
+Examples: \`**/*.test.ts\`, \`.changeset/*.md\`, \`packages/foo/**\`, \`src/**\`, \`test/**\`.
+Package-level \`dir/**\` globs are fine. Keep dot-directories. Do not copy an exact evidence filename unless that file *is* the rule.
 
-Set \`scope\`:
-- \`always\` for path-independent PR process / style / comments / description rules (they stay in the root index)
-- \`triggered\` when the rule applies only to specific files (default when paths are specific)
+Always set \`scope\` explicitly:
+- \`always\` for path-independent PR process / style / comments / description rules (AI disclosure, linked issue, one-topic PRs, verbose comments)
+- \`triggered\` when the rule applies only to specific files
 
-Set \`triggers\` as machine-checkable conditions: glob + optional \`contains\` (regex/term on added diff lines) + optional \`pr\` (title/body/size signal).
+Set \`triggers\` as machine-checkable conditions: glob AND optional \`contains\` (literal term, or /regex/ form, on added diff lines) AND optional \`pr\` (\`title:\` / \`body:\` / \`size:\` / \`files:>=N\`).
 
 Choose ONE outcome (respond with ONLY the JSON, no other text):
 
@@ -115,9 +115,10 @@ Choose ONE outcome (respond with ONLY the JSON, no other text):
   "memory_id": "M-xxx (if reuse/update/merge/propose_retire)",
   "title": "Short title (if new/update)",
   "kind": "gotcha|decision|convention|map (if new)",
-  "paths": ["narrow globs from evidence files, e.g. .changeset/*.md"],
+  "applies_to": ["**/*.test.ts"],
+  "paths": ["alias of applies_to if you prefer"],
   "scope": "always|triggered",
-  "triggers": [{"glob": ".changeset/*.md", "contains": "optional", "pr": "optional"}],
+  "triggers": [{"glob": ".changeset/*.md", "contains": "optional", "pr": "title:changeset"}],
   "body": "≤120 words: trigger and decision change (if new/update)",
   "reasoning": "Why this action",
   "contradicts": false,
@@ -146,6 +147,9 @@ export function parseDistillationResponse(response: string): LearnOutcome {
     const parsed = JSON.parse(jsonStr) as LearnOutcome;
     if (!ACTIONS.includes(parsed.action) || !parsed.reasoning) {
       throw new Error("Missing or invalid action/reasoning");
+    }
+    if ((!parsed.paths || parsed.paths.length === 0) && parsed.applies_to?.length) {
+      parsed.paths = parsed.applies_to;
     }
     return parsed;
   } catch (error) {
@@ -491,30 +495,77 @@ export function evidenceFiles(context: PullRequestContext): string[] {
   return context.evidence_files.length > 0 ? context.evidence_files : context.files;
 }
 
-/** True for monorepo-collapsing globs like packages/** or crates/** (dotdirs stay). */
-export function isOverlyBroadTopLevel(glob: string): boolean {
+/** Repo-wide globs with no directory prefix (star-star, *.md). Package-level dir/** is kept. */
+export function isRepoWideGlob(glob: string): boolean {
   const normalized = glob.replaceAll("\\", "/").replace(/\/$/, "");
-  return /^(?!\.)[^./]+\/\*\*(\/\*)?$/.test(normalized);
+  return normalized === "**"
+    || normalized === "**/*"
+    || normalized === "*"
+    || /^\*\.[^/]+$/.test(normalized)
+    || /^\*\*\/\*\.[^/]+$/.test(normalized);
+}
+
+export function isOverlyBroadTopLevel(glob: string): boolean {
+  return isRepoWideGlob(glob);
+}
+
+export function globCoverage(glob: string, files: string[]): number {
+  if (files.length === 0) return 0;
+  return files.filter((file) => globMatches(glob, file)).length / files.length;
+}
+
+function deepestCommonDir(files: string[]): string {
+  const parts = files.map((file) => file.split("/").slice(0, -1));
+  if (parts.length === 0) return "";
+  let prefix = parts[0] ?? [];
+  for (const next of parts.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < next.length && prefix[i] === next[i]) i += 1;
+    prefix = prefix.slice(0, i);
+    if (prefix.length === 0) return "";
+  }
+  return prefix.join("/");
+}
+
+function extensionOf(file: string): string {
+  const slash = file.lastIndexOf("/");
+  const dot = file.lastIndexOf(".");
+  return dot > slash ? file.slice(dot) : "";
+}
+
+function addDirGlobs(globs: string[], dir: string, files: string[]): void {
+  globs.push(`${dir}/**`);
+  const exts = unique(files.map(extensionOf).filter(Boolean));
+  for (const ext of exts) globs.push(`${dir}/**/*${ext}`);
 }
 
 export function inferPaths(files: string[]): string[] {
+  const normalized = unique(files.map((item) => item.replaceAll("\\", "/")).filter(Boolean));
+  if (normalized.length === 0) return ["**/*"];
+
   const globs: string[] = [];
-  for (const file of unique(files.map((item) => item.replaceAll("\\", "/")))) {
-    if (!file) continue;
-    globs.push(file);
-    const slash = file.lastIndexOf("/");
-    const parent = slash >= 0 ? file.slice(0, slash) : "";
-    const dot = file.lastIndexOf(".");
-    const ext = dot > slash ? file.slice(dot) : "";
-    if (parent) {
-      globs.push(`${parent}/*`);
-      if (ext) globs.push(`${parent}/*${ext}`);
-    } else if (ext) {
-      globs.push(`*${ext}`);
-    }
+  const nested: string[] = [];
+  for (const file of normalized) {
+    if (file.includes("/")) nested.push(file);
+    else globs.push(file);
   }
-  if (globs.length === 0) return ["**/*"];
-  return unique(globs).slice(0, 8);
+  if (nested.length === 0) return unique(globs);
+
+  const common = deepestCommonDir(nested);
+  if (common) {
+    addDirGlobs(globs, common, nested);
+    return unique(globs);
+  }
+
+  const byParent = new Map<string, string[]>();
+  for (const file of nested) {
+    const parent = file.slice(0, file.lastIndexOf("/"));
+    const group = byParent.get(parent) ?? [];
+    group.push(file);
+    byParent.set(parent, group);
+  }
+  for (const [parent, group] of byParent) addDirGlobs(globs, parent, group);
+  return unique(globs);
 }
 
 export function keepSpecificPaths(
@@ -526,9 +577,10 @@ export function keepSpecificPaths(
   if (candidates.length === 0) return inferPaths(evidence);
   const universe = unique([...tracked, ...evidence]);
   const kept = candidates.filter((glob) => {
-    if (isOverlyBroadTopLevel(glob)) return false;
     if (universe.length === 0) return true;
-    return universe.some((file) => globMatches(glob, file));
+    if (!universe.some((file) => globMatches(glob, file))) return false;
+    if (isRepoWideGlob(glob) && globCoverage(glob, universe) > 0.8) return false;
+    return true;
   });
   return kept.length > 0 ? kept : inferPaths(evidence);
 }

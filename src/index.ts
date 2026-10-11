@@ -43,7 +43,7 @@ export {
   shouldOpenLearnPr,
 } from "./learn-run.js";
 export { humanCommentBodies, isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
-export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, createOrReusePullRequest, getDefaultBranch, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
+export { AUTHORED_COMMENT_JQ, GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, authoredCommentApiArgs, createOrReusePullRequest, evidenceFilesFromComments, getDefaultBranch, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
 export {
   clampBody,
   countWords,
@@ -59,7 +59,7 @@ export {
   validateMemoryBody,
   validateSupersededBy,
 } from "./memory.js";
-export { formatRetrieveText, runRetrieve, tokenize } from "./retrieve.js";
+export { formatRetrieveText, matchContains, runRetrieve, tokenize, triggerMatches } from "./retrieve.js";
 export { expandBraces, formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
 export type {
   CompiledOutput,

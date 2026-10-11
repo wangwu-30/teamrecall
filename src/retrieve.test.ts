@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Memory } from "./types.js";
-import { addedLinesFromDiff, formatRetrieveText, runRetrieve, tokenize } from "./retrieve.js";
+import {
+  addedLinesFromDiff,
+  distinctiveTerms,
+  formatRetrieveText,
+  matchContains,
+  PATH_BOOST,
+  runRetrieve,
+  tokenize,
+  triggerMatches,
+} from "./retrieve.js";
 
 function memory(partial: {
   id: string;
@@ -72,10 +81,41 @@ describe("runRetrieve", () => {
     expect(ids).toContain("M-001");
     expect(ids).toContain("M-002");
     expect(result.always.map((item) => item.id)).toEqual(["M-002"]);
-    expect(result.matched.map((item) => item.id)).toContain("M-001");
-    expect(result.matched.map((item) => item.id)).not.toContain("M-003");
+    expect(result.matched[0]?.id).toBe("M-001");
+    expect(result.matched[0]?.score).toBeGreaterThanOrEqual(PATH_BOOST);
+    expect(result.always_cap).toBe(8);
     expect(formatRetrieveText(result)).toMatch(/Always:[\s\S]*M-002/);
     expect(formatRetrieveText(result)).toMatch(/Retrieved:[\s\S]*M-001/);
+  });
+
+  it("ranks unmatched memories instead of hard-filtering them out", async () => {
+    const result = await runRetrieve({
+      memories: [changeset, unrelated],
+      files: ["docs/readme.md"],
+      title: "mdtest reveal_type fixture",
+      k: 5,
+    });
+    expect(result.matched.map((item) => item.id)).toEqual(expect.arrayContaining(["M-001", "M-003"]));
+    expect(result.matched.find((item) => item.id === "M-003")?.reason).toBe("bm25");
+  });
+
+  it("caps the always set and still returns top-k triggered", async () => {
+    const alwaysMany = Array.from({ length: 10 }, (_, index) => memory({
+      id: `M-${String(index + 10).padStart(3, "0")}`,
+      scope: "always",
+      paths: ["**/*"],
+      body: `Always rule ${index} about PR description length.`,
+    }));
+    const result = await runRetrieve({
+      memories: [...alwaysMany, changeset],
+      files: [".changeset/a.md"],
+      k: 1,
+      alwaysCap: 8,
+    });
+    expect(result.always).toHaveLength(8);
+    expect(result.matched).toHaveLength(1);
+    expect(result.matched[0]?.id).toBe("M-001");
+    expect(result.memories).toHaveLength(9);
   });
 
   it("keeps always memories even when BM25 would not rank them", async () => {
@@ -87,5 +127,61 @@ describe("runRetrieve", () => {
     });
     expect(result.always.map((item) => item.id)).toEqual(["M-002"]);
     expect(result.matched[0]?.id).toBe("M-003");
+  });
+});
+
+describe("trigger / contains / tokens / pr signals", () => {
+  it("requires glob AND contains (does not ignore glob)", () => {
+    expect(triggerMatches(
+      { glob: ".changeset/*.md", contains: "console" },
+      { files: ["src/a.ts"], diff: "+console.log(1)" },
+    )).toBe(false);
+    expect(triggerMatches(
+      { glob: ".changeset/*.md", contains: "console" },
+      { files: [".changeset/a.md"], diff: "+console.log(1)" },
+    )).toBe(true);
+  });
+
+  it("treats plain contains as a literal unless /regex/ form", () => {
+    expect(matchContains("a+b", "a+b")).toBe(true);
+    expect(matchContains("foo(", "foo(bar")).toBe(true);
+    expect(matchContains("/a\\+b/", "a+b")).toBe(true);
+    expect(matchContains("/foo\\(/", "foo(bar")).toBe(true);
+  });
+
+  it("tokenizes dotted path terms the same way as queries", () => {
+    const terms = distinctiveTerms({
+      frontmatter: {
+        id: "M-001",
+        kind: "convention",
+        paths: ["crates/ruff_linter/resources/mdtest/*.md", "src/foo.test.ts"],
+        evidence: {},
+        author: "a",
+        created: "2026-10-10",
+        review_after: "2027-01-08",
+        status: "active",
+      },
+      body: "x",
+      filepath: "/tmp/x.md",
+    });
+    const query = tokenize("src/foo.test.ts");
+    expect(query).toEqual(expect.arrayContaining(["foo"]));
+    expect(terms).toEqual(expect.arrayContaining(["foo", "mdtest"]));
+    expect(terms.some((token) => token.includes("."))).toBe(false);
+  });
+
+  it("does not match a files: regex against a synthetic files:N blob", () => {
+    expect(triggerMatches(
+      { glob: "**", pr: "files:[0-9]{2,}" },
+      { files: Array(12).fill("x"), title: "t" },
+    )).toBe(false);
+    expect(triggerMatches(
+      { glob: "**", pr: "files:>=10" },
+      { files: Array(12).fill("x"), title: "t" },
+    )).toBe(true);
+    expect(triggerMatches(
+      { glob: "**", pr: "title:changeset" },
+      { files: ["src/a.ts"], title: "add changeset" },
+    )).toBe(true);
   });
 });

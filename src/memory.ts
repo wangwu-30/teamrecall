@@ -8,12 +8,20 @@ import { exists } from "./utils/atomic.js";
 const DEFAULT_CONFIG: TeamRecallConfig = {
   max_active_memories: 50,
   review_ttl_days: DEFAULT_TTL_DAYS,
+  retrieve_always_cap: 8,
 };
 
 const KINDS: MemoryKind[] = ["gotcha", "decision", "convention", "map"];
 const STATUSES: MemoryStatus[] = ["active", "retired", "superseded", "abandoned"];
 const SCOPES: MemoryScope[] = ["always", "triggered"];
-const PROCESS_STYLE = /\b(pr description|pull request description|ai disclosure|open an? issue|single[- ]topic|review comments?|comment(s)? (too )?(long|short|verbose)|keep comments short|commit message|changelog|explain why)\b/i;
+const PROCESS_STYLE = [
+  /\b(ai|artificial intelligence)\b.{0,24}\b(disclos|usage|used|generated|wrote)\b/i,
+  /\bdisclos\w*.{0,24}\b(ai|artificial intelligence)\b/i,
+  /\b(linked? issues?|open an? issue|issue first|associate[d]? an? issue)\b/i,
+  /\b(single[- ]topic|one[- ]topic|keep prs? scoped|scoped prs?|prs? (are )?scoped)\b/i,
+  /\b(over[- ]explained|no narration|brief comments|keep comments (short|brief)|comments? (too )?(long|short|verbose)|verbose comments?)\b/i,
+  /\b(pr description|pull request description|explain why)\b/i,
+];
 
 export async function loadConfig(projectDir: string): Promise<TeamRecallConfig> {
   const configPath = path.join(projectDir, ".memory", "config.yml");
@@ -97,7 +105,7 @@ export function isValidTrigger(value: unknown): value is MemoryTrigger {
 }
 
 export function defaultScope(paths: string[], body: string): MemoryScope {
-  if (PROCESS_STYLE.test(body) || isBroadPaths(paths)) return "always";
+  if (PROCESS_STYLE.some((pattern) => pattern.test(body)) || isBroadPaths(paths)) return "always";
   return "triggered";
 }
 

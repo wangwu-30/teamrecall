@@ -143,6 +143,26 @@ describe("defaultScope", () => {
   it("defaults to always for process/style rules and triggered for specific paths", () => {
     expect(defaultScope(["**/*"], "Keep review comments short on every PR.")).toBe("always");
     expect(defaultScope([".changeset/*.md"], "Every user-facing change needs a changeset.")).toBe("triggered");
+    expect(defaultScope(["src/x.ts"], "Address review comments by adding a test")).toBe("triggered");
+    expect(defaultScope(["packages/a/*"], "Keep code comments brief; no narration")).toBe("always");
+    expect(defaultScope(["src/x.ts"], "Please disclose AI usage in the PR body")).toBe("always");
+    expect(defaultScope(["src/x.ts"], "Bug fixes need a linked issue")).toBe("always");
+    expect(defaultScope(["src/x.ts"], "Keep PRs scoped to one change")).toBe("always");
+    expect(memoryScope({
+      frontmatter: {
+        id: "M-009",
+        kind: "convention",
+        paths: ["src/**"],
+        scope: "triggered",
+        evidence: {},
+        author: "a",
+        created: "2026-10-10",
+        review_after: "2027-01-08",
+        status: "active",
+      },
+      body: "Please disclose AI usage even though this looks process-like.",
+      filepath: "/tmp/M-009.md",
+    })).toBe("triggered");
     expect(memoryScope({
       frontmatter: {
         id: "M-001",

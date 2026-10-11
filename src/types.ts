@@ -37,6 +37,7 @@ export interface TeamRecallConfig {
   max_active_memories: number;
   review_ttl_days: number;
   distillation_model?: string;
+  retrieve_always_cap?: number;
 }
 
 export interface LearnOutcome {
@@ -45,6 +46,7 @@ export interface LearnOutcome {
   title?: string;
   kind?: MemoryKind;
   paths?: string[];
+  applies_to?: string[];
   scope?: MemoryScope;
   triggers?: MemoryTrigger[];
   body?: string;

@@ -146,12 +146,13 @@ program
 
 program
   .command("retrieve")
-  .description("Rank memories for changed files (trigger/glob filter, then BM25). No LLM.")
+  .description("Rank memories for changed files (BM25 + path/trigger boost). No LLM.")
   .argument("[files...]", "Changed file paths")
   .option("-d, --dir <path>", "Project directory", process.cwd())
   .option("--title <title>", "PR or task title")
   .option("--body <body>", "PR or task body")
   .option("-k, --top <n>", "Top-k triggered memories", "5")
+  .option("--always-cap <n>", "Max always memories (counts toward injection)", "8")
   .option("--json", "Print JSON instead of text")
   .action(async (files: string[], options) => {
     try {
@@ -164,6 +165,7 @@ program
         title: options.title,
         body: options.body,
         k: Number.parseInt(String(options.top), 10) || 5,
+        alwaysCap: Number.parseInt(String(options.alwaysCap), 10) || 8,
       });
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
