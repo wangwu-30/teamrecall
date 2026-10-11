@@ -9,6 +9,7 @@ import {
   normalizeGist,
   pruneCandidates,
   recordCandidates,
+  stripHtml,
 } from "./candidates.js";
 import { isEligibleReviewerComment, reviewerComments } from "./human-comments.js";
 import type { ReviewCandidate } from "./types.js";
@@ -49,7 +50,7 @@ describe("normalizeGist / extractTerms", () => {
   it("keeps suggestion-block and inline-code contents in the gist", () => {
     const suggestionOnly = normalizeGist("```suggestion\nuse Box<T>\n```");
     expect(suggestionOnly).not.toBe("");
-    expect(suggestionOnly).toContain("box");
+    expect(suggestionOnly).toContain("box<t>");
     expect(suggestionOnly).toContain("suggestion");
 
     const suggestionIdent = normalizeGist("```suggestion\nawait onTestFinished()\n```");
@@ -57,11 +58,40 @@ describe("normalizeGist / extractTerms", () => {
 
     const fencedTilde = normalizeGist("~~~suggestion\nexpectTypeOf(value).toEqualTypeOf<string>()\n~~~");
     expect(fencedTilde).toContain("expecttypeof");
-    expect(fencedTilde).toContain("toequaltypeof");
+    expect(fencedTilde).toContain("toequaltypeof<string>");
 
     const inline = normalizeGist("Always call `onTestFinished` before cleanup.");
     expect(inline).toContain("ontestfinished");
     expect(inline).not.toMatch(/^always call before cleanup/);
+  });
+});
+
+describe("code spans survive HTML stripping", () => {
+  it("keeps generics and JSX-like tags inside inline code and suggestion blocks", () => {
+    expect(normalizeGist("Use `Required<BenchmarkUserOptions>` for the resolved config.")).toContain("required<benchmarkuseroptions>");
+    expect(normalizeGist("Prefer `new Set<WeakRef<Mock>>` here.")).toContain("set<weakref<mock>>");
+    const doc = normalizeGist("```suggestion\n## test.sequential <Deprecated /> {#test-sequential}\n```");
+    expect(doc).toContain("deprecated");
+    const ver = normalizeGist("```suggestion\n### vi.when <Version>5.0.0</Version>\n```");
+    expect(ver).toContain("version");
+  });
+
+  it("does not let an unclosed generic in code swallow the following prose", () => {
+    const gist = normalizeGist("Type it as `Pick<Thresholds, 'lines'` then mention => the per-file thresholds option.");
+    expect(gist).toContain("thresholds");
+    expect(gist).toContain("per-file");
+  });
+
+  it("still strips real HTML and images in prose, and mentions/URLs outside code", () => {
+    const gist = normalizeGist("<details><summary>Logs</summary>use `Set<WeakRef<Mock>>` @alice <img src=\"x.png\"> https://x.dev/a</details>");
+    expect(gist).not.toMatch(/details|summary|img|alice|x\.dev/);
+    expect(gist).toContain("set<weakref<mock>>");
+  });
+
+  it("keeps @-paths inside code and extracts terms from generic arguments", () => {
+    expect(normalizeGist("served from `/@fs/<abs-path>`")).toContain("fs/<abs-path>");
+    expect(extractTerms("Use `Pick<Thresholds, 'lines'>` for perFile.")).toEqual(expect.arrayContaining(["thresholds", "lines"]));
+    expect(stripHtml("a `<T>` b <b>bold</b>")).toBe("a `<T>` b  bold ");
   });
 });
 
@@ -228,7 +258,7 @@ describe("matchCandidate / prune / record", () => {
       promoted: [],
     });
     expect(next).toHaveLength(1);
-    expect(next[0]?.gist).toContain("box");
+    expect(next[0]?.gist).toContain("box<t>");
     expect(next[0]?.gist.length).toBeGreaterThan(0);
   });
 

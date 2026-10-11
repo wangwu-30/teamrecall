@@ -22,17 +22,28 @@ export function candidatesPath(projectDir: string): string {
   return path.join(projectDir, ".memory", CANDIDATES_FILENAME);
 }
 
-export function stripHtml(text: string): string {
+// Fenced blocks and inline code are kept verbatim: `Box<T>` / `<Version>` are code, not HTML, and `@fs` is not a mention.
+const CODE_SPAN = /((?:```|~~~)[\s\S]*?(?:```|~~~)|`[^`\n]+`)/g;
+
+function outsideCode(text: string, fn: (prose: string) => string): string {
+  return text.split(CODE_SPAN).map((part, index) => (index % 2 === 1 ? part : fn(part))).join("");
+}
+
+function stripHtmlProse(text: string): string {
   return text
     .replace(/<img\b[^>]*>/gi, " ")
     .replace(/<\/?[a-z][^>]*>/gi, " ");
 }
 
+export function stripHtml(text: string): string {
+  return outsideCode(text, stripHtmlProse);
+}
+
 export function stripUrlsAndMentions(text: string): string {
-  return stripHtml(text)
+  return outsideCode(text, (prose) => stripHtmlProse(prose)
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/\[[^\]]*\]\([^)]+\)/g, " ")
-    .replace(/@[a-z0-9_-]+/gi, " ");
+    .replace(/@[a-z0-9_-]+/gi, " "));
 }
 
 export function normalizeGist(text: string): string {
