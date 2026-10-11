@@ -13,7 +13,7 @@ import { formatSweepReport, runSweep } from "./sweep.js";
 program
   .name("teamrecall")
   .description("Git-native team memory for Claude Code, Codex, and Cursor")
-  .version("0.1.0");
+  .version("0.3.0");
 
 program
   .command("init")

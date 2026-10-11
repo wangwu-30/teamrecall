@@ -115,7 +115,7 @@ The agent follows [`INSTALL.md`](INSTALL.md): detects the repo, runs `npx -y git
 **Or run it yourself:**
 
 ```bash
-npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes
+npx -y github:wangwu-30/teamrecall#v0.3.0 init --yes
 ```
 
 **它会做什么：**
@@ -227,19 +227,19 @@ status: active
 
 ```bash
 # Initialize teamrecall (non-interactive, re-run safe)
-npx -y github:wangwu-30/teamrecall#v0.2.0 init --yes --json
+npx -y github:wangwu-30/teamrecall#v0.3.0 init --yes --json
 
 # Compile memories into agent rules
-npx -y github:wangwu-30/teamrecall#v0.2.0 compile
+npx -y github:wangwu-30/teamrecall#v0.3.0 compile
 
 # Check installation
-npx -y github:wangwu-30/teamrecall#v0.2.0 doctor
+npx -y github:wangwu-30/teamrecall#v0.3.0 doctor
 
 # Learn from a PR (no LLM secret → deterministic distiller)
-npx -y github:wangwu-30/teamrecall#v0.2.0 learn 42
+npx -y github:wangwu-30/teamrecall#v0.3.0 learn 42
 
 # Experimental: rank memories for a change (opt-in; not used by default compile)
-npx -y github:wangwu-30/teamrecall#v0.2.0 retrieve -- src/foo.ts
+npx -y github:wangwu-30/teamrecall#v0.3.0 retrieve -- src/foo.ts
 ```
 
 `teamrecall retrieve` is experimental. Default compile still writes path-scoped rules and the root index the same way as v0.2; retrieve is an extra command, not wired into init/learn/compile.
@@ -282,9 +282,9 @@ npx -y github:wangwu-30/teamrecall#v0.2.0 retrieve -- src/foo.ts
 
 **Q: What if I don't use Claude Code?**
 
-**English:** teamrecall works with Cursor, Codex, and any agent that reads `.cursorrules` or `AGENTS.md`. The learning workflow can use `codex exec` instead of `claude -p` (see `npx -y github:wangwu-30/teamrecall#v0.2.0 learn`).
+**English:** teamrecall works with Cursor, Codex, and any agent that reads `.cursorrules` or `AGENTS.md`. The learning workflow can use `codex exec` instead of `claude -p` (see `npx -y github:wangwu-30/teamrecall#v0.3.0 learn`).
 
-**中文：** teamrecall 支持 Cursor、Codex 以及任何读取 `.cursorrules` 或 `AGENTS.md` 的助手。学习工作流可以使用 `codex exec` 代替 `claude -p`（参见 `npx -y github:wangwu-30/teamrecall#v0.2.0 learn`）。
+**中文：** teamrecall 支持 Cursor、Codex 以及任何读取 `.cursorrules` 或 `AGENTS.md` 的助手。学习工作流可以使用 `codex exec` 代替 `claude -p`（参见 `npx -y github:wangwu-30/teamrecall#v0.3.0 learn`）。
 
 ---
 
