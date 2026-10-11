@@ -122,6 +122,24 @@ describe("runRetrieve", () => {
     expect(result.memories).toHaveLength(9);
   });
 
+  it("caps triggered retrieval at 10 even when k is larger", async () => {
+    const many = Array.from({ length: 15 }, (_, index) => memory({
+      id: `M-${String(index + 20).padStart(3, "0")}`,
+      scope: "triggered",
+      paths: ["src/**"],
+      body: `Triggered rule ${index} about gateway retries in the wrapper.`,
+    }));
+    const result = await runRetrieve({
+      memories: [...many, processRule],
+      files: ["src/gateway.ts"],
+      k: 20,
+    });
+    expect(result.k).toBe(10);
+    expect(result.matched.length).toBeLessThanOrEqual(10);
+    expect(result.always.length).toBeLessThanOrEqual(8);
+    expect(result.memories.length).toBeLessThanOrEqual(18);
+  });
+
   it("keeps always memories even when BM25 would not rank them", async () => {
     const result = await runRetrieve({
       memories: [processRule, unrelated],

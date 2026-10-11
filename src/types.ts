@@ -2,7 +2,7 @@ export type MemoryKind = "gotcha" | "decision" | "convention" | "map";
 export type MemoryStatus = "active" | "retired" | "superseded" | "abandoned";
 export type MemoryScope = "always" | "triggered";
 export type PathsSource = "distiller" | "inferred" | "human";
-export type LearnAction = "reuse" | "update" | "merge" | "propose_retire" | "new" | "no_op";
+export type LearnAction = "reuse" | "update" | "merge" | "propose_retire" | "new" | "promote" | "no_op";
 
 export interface MemoryTrigger {
   glob: string;
@@ -20,6 +20,7 @@ export interface MemoryFrontmatter {
   evidence: {
     pr?: string;
     prs?: string[];
+    reviewers?: string[];
     review_url?: string;
     commits?: string[];
   };
@@ -60,6 +61,20 @@ export interface LearnOutcome {
   memories?: LearnOutcome[];
   contradicts?: boolean;
   conflict_with?: string;
+  candidate_id?: string;
+  same_as?: string;
+}
+
+export interface ReviewCandidate {
+  id: string;
+  gist: string;
+  terms: string[];
+  files: string[];
+  pr: string;
+  url?: string;
+  date: string;
+  reviewer: string;
+  promoted_to?: string;
 }
 
 export interface CompiledOutput {
@@ -80,6 +95,7 @@ export interface PullRequestContext {
   merged: boolean;
   review_comments: string[];
   human_review_comments: string[];
+  reviewer_comments: Array<{ body: string; author: string; path?: string }>;
   commit_messages: string[];
   commits: string[];
   files: string[];

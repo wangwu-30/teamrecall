@@ -85,7 +85,9 @@ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
 
 **One repo setting:** GitHub → this repo → Settings → Actions → General → Workflow permissions → enable **Allow GitHub Actions to create and approve pull requests**.
 
-Learn works on day one with **zero secrets**: if `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are both unset, `trc learn` uses the deterministic distiller and says so in the learn PR body.
+Zero-secret mode **does not write memories from review comments**. If `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are both unset, `trc learn` only records recurrence candidates and compiles existing hand-written memories. Recurrence promotion needs an LLM engine (`claude` / `codex` CLI, or one of those API keys).
+
+Candidate gists live on the `teamrecall/state` branch. On a public repo that branch is public. There is no Actions-cache store — `pull_request` caches do not accumulate across PRs.
 
 After the human runs the secret command and flips the setting, verify:
 

@@ -1,10 +1,30 @@
 export { backfillProject, collectRuleSources, extractRuleLessons } from "./backfill.js";
-export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
+export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, listStaleGeneratedRules, rankMemoriesForIndex, writeCompiledFiles } from "./compiler.js";
+export {
+  candidatesOverlap,
+  extractTerms,
+  generateCandidateId,
+  isPromotableQuality,
+  loadCandidates,
+  matchCandidate,
+  mergeCandidateLists,
+  normalizeGist,
+  pruneCandidates,
+  recordCandidates,
+  stripHtml,
+  toImperativeBody,
+} from "./candidates.js";
 export {
   AGENTS_INDEX_MAX_LINES,
+  CANDIDATE_CAP,
+  CANDIDATE_PROMPT_K,
+  CANDIDATE_TTL_DAYS,
   CLAUDE_INDEX_IMPORT,
+  COMPILE_ALWAYS_CAP,
+  COMPILE_TRIGGERED_CAP,
   MAX_ACTIVE_MEMORIES,
   MAX_BODY_WORDS,
+  STATE_BRANCH,
   TEAMRECALL_END,
   TEAMRECALL_START,
 } from "./constants.js";
@@ -27,8 +47,12 @@ export {
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
+  matchingReviewer,
+  maybePromoteFromCandidates,
+  selectPromptCandidates,
   parseDistillationResponse,
   applyAppliesTo,
+  applyCandidateDecision,
   gateAlwaysScope,
   detectConflicts,
   inferPaths,
@@ -47,8 +71,8 @@ export {
   sanitisedChildEnv,
   shouldOpenLearnPr,
 } from "./learn-run.js";
-export { humanCommentBodies, isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
-export { AUTHORED_COMMENT_JQ, GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, authoredCommentApiArgs, createOrReusePullRequest, evidenceFilesFromComments, getDefaultBranch, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
+export { humanCommentBodies, isBotAuthor, isEligibleReviewerComment, reviewerComments, shouldLearnFromClosedPr } from "./human-comments.js";
+export { AUTHORED_COMMENT_JQ, GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, authoredCommentApiArgs, createOrReusePullRequest, evidenceFilesFromComments, getDefaultBranch, gitIdentityArgs, gitPushArgs, isCandidateStatePath, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
 export {
   clampBody,
   countWords,
@@ -75,5 +99,6 @@ export type {
   MemoryTrigger,
   PathsSource,
   PullRequestContext,
+  ReviewCandidate,
   TeamRecallConfig,
 } from "./types.js";

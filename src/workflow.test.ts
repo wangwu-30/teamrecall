@@ -29,6 +29,15 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("Learn from closed PR");
     expect(template).toContain("learn ${{ github.event.pull_request.number }} --ci");
     expect(template).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(template).toContain("teamrecall/state");
+    expect(template).toContain("Load candidate state");
+    expect(template).toContain("Persist candidate state");
+    expect(template).toContain(".memory/candidates.jsonl");
+    expect(template).toContain("merge-candidates");
+    expect(template).toContain("fork PR");
+    expect(template).toContain("+teamrecall/state:teamrecall/state");
+    expect(template).toContain("::warning::");
+    expect(template).not.toContain("actions_cache");
     expect(template).toContain("needs: decide");
     expect(template).toMatch(/jobs:\n  decide:/);
     expect(template).toContain("pulls/${PR}/reviews");

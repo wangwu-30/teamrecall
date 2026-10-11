@@ -38,6 +38,7 @@ describe("v0.2 golden compile output", () => {
   it("byte-matches the checked-in snapshot for v0.2-style memories", async () => {
     const memories = await loadMemories(path.join(FIXTURE, "input"));
     expect(memories.map((memory) => memory.frontmatter.id)).toEqual(["M-001", "M-002", "M-003"]);
+    expect(new Set(memories.map((memory) => memory.frontmatter.created)).size).toBe(3);
     expect(memories.every((memory) => memory.frontmatter.scope === undefined)).toBe(true);
     expect(memories[2]?.frontmatter.paths).toEqual([]);
 

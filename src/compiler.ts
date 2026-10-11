@@ -16,19 +16,44 @@ export async function compileMemories(
   _projectDir: string,
   memories: Memory[],
 ): Promise<CompiledOutput> {
-  const activeMemories = memories
+  const catalog = memories
     .filter((memory) => memory.frontmatter.status === "active")
     .slice(0, MAX_ACTIVE_MEMORIES);
   const abandonedMemories = memories.filter((memory) => memory.frontmatter.status === "abandoned");
-  const compact = generateCompactIndex(activeMemories, abandonedMemories);
+  const compact = generateCompactIndex(catalog, abandonedMemories);
 
   return {
     agents_md: compact,
-    index_md: generateIndexMd(activeMemories, abandonedMemories),
+    index_md: generateIndexMd(catalog, abandonedMemories),
     compact_index: compact,
-    claude_rules: generateClaudeRules(activeMemories),
-    cursor_rules: generateCursorRules(activeMemories),
+    claude_rules: generateClaudeRules(catalog),
+    cursor_rules: generateCursorRules(catalog),
   };
+}
+
+export function evidenceCount(memory: Memory): number {
+  return memory.frontmatter.evidence.prs?.length
+    ?? (memory.frontmatter.evidence.pr ? 1 : 0);
+}
+
+/** Opt-in ranking (recency, then evidence). Default compile keeps v0.3.0 catalog/id order. */
+export function rankMemoriesForIndex(active: Memory[]): Memory[] {
+  const byRank = (left: Memory, right: Memory): number => {
+    const created = (right.frontmatter.created ?? "").localeCompare(left.frontmatter.created ?? "");
+    if (created !== 0) return created;
+    const evidence = evidenceCount(right) - evidenceCount(left);
+    if (evidence !== 0) return evidence;
+    return left.frontmatter.id.localeCompare(right.frontmatter.id);
+  };
+  return [
+    ...active.filter((memory) => memory.frontmatter.scope === "always").sort(byRank),
+    ...active.filter((memory) => memory.frontmatter.scope !== "always").sort(byRank),
+  ];
+}
+
+/** @deprecated Use rankMemoriesForIndex. Compile no longer globally caps to the first 10 ids. */
+export function selectInjectedMemories(active: Memory[]): Memory[] {
+  return rankMemoriesForIndex(active);
 }
 
 function generateIndexMd(active: Memory[], abandoned: Memory[]): string {

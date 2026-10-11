@@ -1,3 +1,4 @@
+import { COMPILE_TRIGGERED_CAP } from "./constants.js";
 import { loadConfig, loadMemories, memoryScope } from "./memory.js";
 import { globMatches } from "./sweep.js";
 import type { Memory, MemoryTrigger, PathsSource } from "./types.js";
@@ -249,7 +250,8 @@ function scoreMemories(
 export async function runRetrieve(input: RetrieveInput): Promise<RetrieveResult> {
   const memories = (input.memories ?? (input.projectDir ? await loadMemories(input.projectDir) : []))
     .filter((memory) => memory.frontmatter.status === "active");
-  const k = input.k ?? DEFAULT_RETRIEVE_K;
+  // Triggered memories are clamped to COMPILE_TRIGGERED_CAP (10) per query.
+  const k = Math.min(input.k ?? DEFAULT_RETRIEVE_K, COMPILE_TRIGGERED_CAP);
   let alwaysCap = input.alwaysCap;
   if (alwaysCap === undefined && input.projectDir) {
     const config = await loadConfig(input.projectDir);
