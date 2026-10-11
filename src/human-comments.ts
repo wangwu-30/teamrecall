@@ -88,10 +88,15 @@ export function isEmptyOrNoopSuggestion(text: string): boolean {
   if (!hasSuggestionFence(text)) return false;
   const suggestions = extractSuggestionBodies(text);
   if (suggestions.length === 0) return false;
-  const prose = normalizeSuggestionText(stripSuggestionFences(text));
+  const proseRaw = stripSuggestionFences(text);
+  const prose = normalizeSuggestionText(proseRaw);
   return suggestions.every((body) => {
     const norm = normalizeSuggestionText(body);
-    return !norm || Boolean(prose && norm === prose);
+    if (!norm) {
+      // Empty suggestion means "delete these lines" — keep if the reviewer explained why.
+      return commentWordCount(proseRaw) < 5;
+    }
+    return Boolean(prose && norm === prose);
   });
 }
 

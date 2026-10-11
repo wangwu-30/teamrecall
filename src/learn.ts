@@ -13,6 +13,7 @@ import {
   PROMPT_COMMITS_CHARS,
   PROMPT_CONTEXT_CHARS,
   PROMPT_MEMORY_K,
+  PROMPT_MEMORY_TITLE_CHARS,
 } from "./constants.js";
 import { bm25ScoresFromIndex, buildBm25Index, tokenize } from "./retrieve.js";
 import {
@@ -258,7 +259,7 @@ export function generateDistillationPrompt(input: LearnInput): string {
     title: input.title,
     body: input.pr_body,
   })
-    .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)}`)
+    .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body).slice(0, PROMPT_MEMORY_TITLE_CHARS)}`)
     .join("\n");
   const candidateIndex = selectPromptCandidates(input.candidates ?? [], {
     review_comments: input.review_comments,
