@@ -22,3 +22,4 @@ export const CANDIDATE_PROMPT_FILES = 3;
 export const PROMPT_CONTEXT_CHARS = 8000;
 export const PROMPT_COMMITS_CHARS = 2000;
 export const PROMPT_MEMORY_K = 30;
+export const PROMPT_MEMORY_TITLE_CHARS = 120;

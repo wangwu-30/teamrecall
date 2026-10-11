@@ -30,7 +30,7 @@ import {
   selectPromptCandidates,
   selectPromptMemories,
 } from "./learn.js";
-import { CANDIDATE_PROMPT_FILES, CANDIDATE_PROMPT_K, PROMPT_COMMITS_CHARS, PROMPT_CONTEXT_CHARS, PROMPT_MEMORY_K } from "./constants.js";
+import { CANDIDATE_PROMPT_FILES, CANDIDATE_PROMPT_K, PROMPT_COMMITS_CHARS, PROMPT_CONTEXT_CHARS, PROMPT_MEMORY_K, PROMPT_MEMORY_TITLE_CHARS } from "./constants.js";
 import { generateCandidateId, loadCandidates, normalizeGist } from "./candidates.js";
 import {
   claudeDistillArgs,
@@ -153,6 +153,23 @@ describe("generateDistillationPrompt", () => {
     expect(prompt).toContain("src/auth/**");
     expect(prompt).toContain("docs/**");
     expect(prompt).not.toMatch(/changeset|mdtest|vitest|biome|ruff|tldraw/i);
+  });
+
+  it("caps existing-memory titles at 120 characters", () => {
+    const tail = "TAILMARKER-SHOULD-NOT-APPEAR";
+    const title = `${"Keep retries only in the gateway wrapper so callers share one policy. ".repeat(4)}${tail}`;
+    expect(title.length).toBeGreaterThan(PROMPT_MEMORY_TITLE_CHARS);
+    const prompt = generateDistillationPrompt({
+      pr_number: "42",
+      diff: "diff",
+      pr_body: "body",
+      review_comments: ["Keep retries only in the gateway wrapper."],
+      commit_messages: ["msg"],
+      existing_memories: [memory("M-001", title)],
+    });
+    expect(prompt).toContain("M-001");
+    expect(prompt).toContain(title.slice(0, PROMPT_MEMORY_TITLE_CHARS));
+    expect(prompt).not.toContain(tail);
   });
 
   it("ranks a same-rule candidate into the shown set among 2000 noisy ones", () => {

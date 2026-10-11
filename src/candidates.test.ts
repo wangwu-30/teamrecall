@@ -120,6 +120,14 @@ describe("reviewer filters", () => {
       author: "bob",
     }, "alice")).toBe(false);
     expect(isEligibleReviewerComment({
+      body: "Please delete this unused helper function.\n```suggestion\n\n```",
+      author: "bob",
+    }, "alice")).toBe(true);
+    expect(isEligibleReviewerComment({
+      body: "Remove it.\n```suggestion\n\n```",
+      author: "bob",
+    }, "alice")).toBe(false);
+    expect(isEligibleReviewerComment({
       body: "![image](https://github.com/user-attachments/assets/abcd1234.gif)",
       author: "bob",
     }, "alice")).toBe(false);
