@@ -139,7 +139,7 @@ export function pathMatches(memory: Memory, files: string[]): boolean {
 }
 
 export function isTrustedPathSource(source: PathsSource | undefined): boolean {
-  return source === "distiller" || source === "human";
+  return source !== "inferred";
 }
 
 export function triggerContainsMatches(

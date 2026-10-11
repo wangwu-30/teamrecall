@@ -368,7 +368,7 @@ function planOne(
   const nextFrontmatter: MemoryFrontmatter = {
     ...target.frontmatter,
     paths: resolved?.paths ?? target.frontmatter.paths,
-    ...(resolved ? { paths_source: resolved.source } : {}),
+    paths_source: resolved?.source ?? target.frontmatter.paths_source ?? "human",
     scope: outcome.scope ?? target.frontmatter.scope,
     triggers: outcome.triggers ?? target.frontmatter.triggers,
     evidence: {
@@ -576,6 +576,8 @@ function mergeGroups(groups: PathGroup[], max: number): PathGroup[] {
       if (ancestor && !isTooShallow(ancestor)) {
         return [{ dir: ancestor, files: next.flatMap((group) => group.files) }];
       }
+      next.sort((a, b) => b.files.length - a.files.length || a.dir.localeCompare(b.dir));
+      next = next.slice(0, max);
       break;
     }
     const merged: PathGroup = {
@@ -626,7 +628,7 @@ export function inferPaths(files: string[]): string[] {
     }
   }
 
-  return unique(globs);
+  return unique(globs).slice(0, MAX_INFER_PATH_GLOBS);
 }
 
 export function resolveMemoryPaths(

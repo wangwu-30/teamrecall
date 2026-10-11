@@ -4,6 +4,7 @@ import {
   addedLinesFromDiff,
   distinctiveTerms,
   formatRetrieveText,
+  isTrustedPathSource,
   matchContains,
   pathMatches,
   runRetrieve,
@@ -243,6 +244,36 @@ describe("trigger / contains / tokens / pr signals", () => {
     expect(result.matched.find((item) => item.id === "M-010")?.reason).toBe("bm25");
     expect(result.matched[0]?.id).toBe("M-011");
     expect(result.matched.map((item) => item.id)).toContain("M-010");
+  });
+
+  it("treats missing paths_source as trusted so legacy memories keep the hard tier", async () => {
+    expect(isTrustedPathSource(undefined)).toBe(true);
+    expect(isTrustedPathSource("human")).toBe(true);
+    expect(isTrustedPathSource("distiller")).toBe(true);
+    expect(isTrustedPathSource("inferred")).toBe(false);
+
+    const legacy = memory({
+      id: "M-001",
+      scope: "triggered",
+      paths: [".changeset/*.md"],
+      body: "Every user-facing change needs a changeset file under .changeset.",
+    });
+    delete legacy.frontmatter.paths_source;
+    const noisy = memory({
+      id: "M-009",
+      scope: "triggered",
+      paths: ["docs/**"],
+      body: `${"formatter ".repeat(80)}unrelated docs note`,
+    });
+    const result = await runRetrieve({
+      memories: [legacy, noisy],
+      files: [".changeset/a.md"],
+      title: "formatter formatter formatter",
+      body: "formatter ".repeat(40),
+      k: 2,
+    });
+    expect(result.matched[0]?.id).toBe("M-001");
+    expect(result.matched[0]?.reason).toBe("glob");
   });
 
   it("does not treat empty or ** paths as a path match", () => {
