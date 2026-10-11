@@ -23,7 +23,7 @@ describe("teamrecall GitHub workflow", () => {
     expect(template).toContain("concurrency:");
     expect(template).toContain("group: teamrecall-learn-${{ github.repository }}");
     expect(template).toContain("cancel-in-progress: false");
-    expect(template).toContain("TEAMRECALL_REF: v0.2.0");
+    expect(template).toContain("TEAMRECALL_REF: v0.3.0");
     expect(template).toContain('github.event.pull_request.merged }}" = "true"');
     expect(template).toContain("github.event.repository.default_branch");
     expect(template).toContain("Learn from closed PR");

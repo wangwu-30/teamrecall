@@ -1,6 +1,6 @@
 {
   "name": "teamrecall",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Git-native team memory that shows up automatically in Claude Code, Codex, and Cursor",
   "type": "module",
   "bin": {

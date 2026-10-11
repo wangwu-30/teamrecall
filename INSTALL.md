@@ -21,11 +21,11 @@ Resolve the latest `v*` tag. Do not use branch `main`. Do not use the unpublishe
 ```sh
 TAG=$(git ls-remote --tags --refs https://github.com/wangwu-30/teamrecall.git \
   | awk -F/ '{print $NF}' | grep -E '^v[0-9]' | sort -V | tail -1)
-TAG=${TAG:-v0.2.0}
+TAG=${TAG:-v0.3.0}
 trc() { npx -y "github:wangwu-30/teamrecall#${TAG}" "$@"; }
 ```
 
-`v0.2.0` is the fallback if tag discovery fails. `trc` is a shell function (not a quoted command string). Call it as `trc <subcommand>`.
+`v0.3.0` is the fallback if tag discovery fails. `trc` is a shell function (not a quoted command string). Call it as `trc <subcommand>`.
 
 ## 2. Init (non-interactive, re-run safe)
 
