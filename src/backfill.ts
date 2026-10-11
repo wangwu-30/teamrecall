@@ -113,6 +113,7 @@ export async function backfillProject(
         commit_messages: [],
         commits: [],
         files: [source],
+        evidence_files: [source],
       }, ttlDays);
       if (file) {
         created.push(file);
@@ -163,6 +164,8 @@ async function writeNewMemory(
     id,
     kind: lesson.kind ?? "convention",
     paths: lesson.paths ?? ["**/*"],
+    paths_source: "human",
+    ...(lesson.scope ? { scope: lesson.scope } : {}),
     evidence: { pr: context.number === "backfill" ? undefined : `#${context.number}` },
     author: context.author,
     created,

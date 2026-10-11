@@ -7,6 +7,7 @@ import { runDoctor } from "./doctor.js";
 import { runInitCommand } from "./init.js";
 import { runLearn, shouldOpenLearnPr } from "./learn-run.js";
 import { loadMemories } from "./memory.js";
+import { formatRetrieveText, runRetrieve } from "./retrieve.js";
 import { formatSweepReport, runSweep } from "./sweep.js";
 
 program
@@ -121,6 +122,7 @@ program
   .option("-d, --dir <path>", "Project directory", process.cwd())
   .option("--ci", "CI mode: compile and open a bot PR when there are changes")
   .option("--pr", "Open a bot PR (local learn defaults to no PR)")
+  .option("--experimental-paths", "Use v0.3 path inference (or set experimental.retrieval in config.yml)")
   .action(async (pr, options) => {
     try {
       const projectDir = path.resolve(options.dir);
@@ -130,6 +132,7 @@ program
         pr: String(pr),
         openPr: shouldOpenLearnPr({ ci: Boolean(options.ci), pr: Boolean(options.pr) }),
         ci: Boolean(options.ci),
+        experimentalPaths: Boolean(options.experimentalPaths),
       });
 
       console.log(`Outcome: ${result.plan.summary}`);
@@ -137,6 +140,40 @@ program
         console.log(`- ${outcome.action}${outcome.memory_id ? ` ${outcome.memory_id}` : ""}: ${outcome.reasoning}`);
       }
       if (result.pr_url) console.log(`PR: ${result.pr_url}`);
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("retrieve")
+  .description("Experimental: rank memories for changed files (BM25 + path/trigger). Not used by default compile.")
+  .argument("[files...]", "Changed file paths")
+  .option("-d, --dir <path>", "Project directory", process.cwd())
+  .option("--title <title>", "PR or task title")
+  .option("--body <body>", "PR or task body")
+  .option("-k, --top <n>", "Top-k triggered memories", "5")
+  .option("--always-cap <n>", "Max always memories (counts toward injection)", "8")
+  .option("--json", "Print JSON instead of text")
+  .action(async (files: string[], options) => {
+    try {
+      const projectDir = path.resolve(options.dir);
+      const diff = process.stdin.isTTY ? "" : await readStdin();
+      const result = await runRetrieve({
+        projectDir,
+        files,
+        diff,
+        title: options.title,
+        body: options.body,
+        k: Number.parseInt(String(options.top), 10) || 5,
+        alwaysCap: Number.parseInt(String(options.alwaysCap), 10) || 8,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      process.stdout.write(formatRetrieveText(result));
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
@@ -159,5 +196,13 @@ program
       process.exit(1);
     }
   });
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 program.parse();

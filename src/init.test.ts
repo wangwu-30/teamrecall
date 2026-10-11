@@ -174,6 +174,7 @@ describe("extractRuleLessons", () => {
     expect(lessons.length).toBeGreaterThan(0);
     expect(lessons[0].action).toBe("new");
     expect(lessons[0].kind).toBe("convention");
+    expect(lessons[0].paths).toEqual(["**/*"]);
     expect(lessons[0].body).toMatch(/httpOnly/i);
   });
 });

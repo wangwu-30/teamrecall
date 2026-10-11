@@ -1,5 +1,5 @@
 export { backfillProject, collectRuleSources, extractRuleLessons } from "./backfill.js";
-export { compileMemories, generateCompactIndex, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
+export { compactLine, compileMemories, generateCompactIndex, indexIsCapped, listStaleGeneratedRules, writeCompiledFiles } from "./compiler.js";
 export {
   AGENTS_INDEX_MAX_LINES,
   CLAUDE_INDEX_IMPORT,
@@ -28,7 +28,14 @@ export {
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
   parseDistillationResponse,
+  applyAppliesTo,
+  gateAlwaysScope,
   detectConflicts,
+  inferPaths,
+  inferPathsExperimental,
+  inferPathsV02,
+  keepSpecificPaths,
+  resolveMemoryPaths,
   pathsOverlap,
   planLearnOutcomes,
 } from "./learn.js";
@@ -41,26 +48,32 @@ export {
   shouldOpenLearnPr,
 } from "./learn-run.js";
 export { humanCommentBodies, isBotAuthor, shouldLearnFromClosedPr } from "./human-comments.js";
-export { GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, createOrReusePullRequest, getDefaultBranch, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
+export { AUTHORED_COMMENT_JQ, GIT_AUTHOR_NAME, MANAGED_GIT_PATHS, authoredCommentApiArgs, createOrReusePullRequest, evidenceFilesFromComments, getDefaultBranch, gitIdentityArgs, gitPushArgs, pullRequestAlreadyExists, stageManagedChanges, startPointForBotBranch } from "./github.js";
 export {
   clampBody,
   countWords,
   formatMemory,
   generateMemoryId,
+  defaultScope,
   isValidFrontmatter,
   loadConfig,
   loadMemories,
+  memoryScope,
   parseMemory,
   slugify,
   validateMemoryBody,
   validateSupersededBy,
 } from "./memory.js";
+export { formatRetrieveText, isTrustedPathSource, matchContains, runRetrieve, tokenize, triggerMatches } from "./retrieve.js";
 export { expandBraces, formatSweepReport, globMatches, globToRegExp, isExpired, isPathDead, runSweep } from "./sweep.js";
 export type {
   CompiledOutput,
   LearnOutcome,
   Memory,
   MemoryFrontmatter,
+  MemoryScope,
+  MemoryTrigger,
+  PathsSource,
   PullRequestContext,
   TeamRecallConfig,
 } from "./types.js";

@@ -2,6 +2,7 @@ export interface AuthoredComment {
   body: string;
   author: string;
   user_type?: string;
+  path?: string;
 }
 
 /** Plain logins `gh pr view` returns without a `[bot]` suffix. */

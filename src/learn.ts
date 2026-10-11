@@ -8,7 +8,9 @@ import {
   memoryFilename,
   reviewAfterDate,
 } from "./memory.js";
-import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, PullRequestContext } from "./types.js";
+import { defaultScope } from "./memory.js";
+import { globMatches } from "./sweep.js";
+import type { LearnOutcome, Memory, MemoryFrontmatter, MemoryKind, MemoryScope, PathsSource, PullRequestContext } from "./types.js";
 
 export interface LearnInput {
   pr_number: string;
@@ -47,6 +49,7 @@ export interface LearnPlan {
   updated: number;
   retired: number;
   conflicts: PathConflict[];
+  scope_notes: string[];
   distiller: DistillerKind;
   distiller_reason?: DistillerReason;
   summary: string;
@@ -63,7 +66,7 @@ const ACTIONS: LearnOutcome["action"][] = [
 
 export function generateDistillationPrompt(input: LearnInput): string {
   const existingIndex = input.existing_memories
-    .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)} (paths: ${memory.frontmatter.paths.join(", ")})`)
+    .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body)} (paths: ${memory.frontmatter.paths.join(", ")}; scope: ${memory.frontmatter.scope ?? "—"})`)
     .join("\n");
 
   return `You are reviewing a closed pull request to extract reusable engineering knowledge for the team.
@@ -95,6 +98,15 @@ A memory must have:
 2. Decision it changes (not just facts)
 3. Broader applicability beyond this specific PR
 
+You own where the rule applies. Output \`applies_to\` globs for the *rule*, not the file the comment happened to sit on.
+Generic examples: \`src/auth/**\`, \`docs/**\`, \`**/*.css\`. Keep dot-directories. Do not copy an exact evidence filename unless that file *is* the rule.
+
+Always set \`scope\` explicitly (do not leave it for the heuristic):
+- \`always\` — the rule is about the PR itself (description, process, style) and should be in the root index
+- \`triggered\` — the rule applies only under \`applies_to\`
+
+Set \`triggers\` as machine-checkable conditions: glob AND optional \`contains\` (literal substring on added diff lines) AND optional \`pr\` (\`title:\` / \`body:\` / \`size:\` / \`files:>=N\`).
+
 Choose ONE outcome (respond with ONLY the JSON, no other text):
 
 \`\`\`json
@@ -103,7 +115,10 @@ Choose ONE outcome (respond with ONLY the JSON, no other text):
   "memory_id": "M-xxx (if reuse/update/merge/propose_retire)",
   "title": "Short title (if new/update)",
   "kind": "gotcha|decision|convention|map (if new)",
-  "paths": ["glob patterns (if new/update)"],
+  "applies_to": ["src/auth/**"],
+  "paths": ["alias of applies_to if you prefer"],
+  "scope": "always|triggered",
+  "triggers": [{"glob": "src/auth/**", "contains": "optional", "pr": "title:auth"}],
   "body": "≤120 words: trigger and decision change (if new/update)",
   "reasoning": "Why this action",
   "contradicts": false,
@@ -133,6 +148,7 @@ export function parseDistillationResponse(response: string): LearnOutcome {
     if (!ACTIONS.includes(parsed.action) || !parsed.reasoning) {
       throw new Error("Missing or invalid action/reasoning");
     }
+    applyAppliesTo(parsed);
     return parsed;
   } catch (error) {
     return {
@@ -161,6 +177,41 @@ export function checkDuplicate(title: string, paths: string[], existing: Memory[
   return { is_duplicate: false, reason: "No duplicate found" };
 }
 
+export function applyAppliesTo(outcome: LearnOutcome): LearnOutcome {
+  if ((!outcome.paths || outcome.paths.length === 0) && outcome.applies_to?.length) {
+    outcome.paths = outcome.applies_to;
+  }
+  for (const child of outcome.memories ?? []) applyAppliesTo(child);
+  return outcome;
+}
+
+export function distinctEvidencePrs(...values: Array<string | string[] | undefined>): string[] {
+  const found: string[] = [];
+  for (const value of values) {
+    if (!value) continue;
+    for (const item of Array.isArray(value) ? value : [value]) {
+      const number = item.replace(/^#/, "").trim();
+      if (number) found.push(`#${number}`);
+    }
+  }
+  return unique(found);
+}
+
+export function allowAlways(pathsSource: PathsSource | undefined, prs: string[]): boolean {
+  if (pathsSource === "human") return true;
+  return prs.length >= 2;
+}
+
+export function gateAlwaysScope(
+  requested: MemoryScope,
+  pathsSource: PathsSource | undefined,
+  prs: string[],
+): { scope: MemoryScope; downgraded: boolean } {
+  if (requested !== "always") return { scope: requested, downgraded: false };
+  if (allowAlways(pathsSource, prs)) return { scope: "always", downgraded: false };
+  return { scope: "triggered", downgraded: true };
+}
+
 export function forceUpdateIfDuplicate(outcome: LearnOutcome, existing: Memory[]): LearnOutcome {
   if (outcome.action !== "new") return outcome;
   const title = outcome.title || firstLine(outcome.body || "");
@@ -181,6 +232,8 @@ export function planLearnOutcomes(
   context: PullRequestContext,
   projectDir: string,
   ttlDays = 90,
+  trackedFiles: string[] = [],
+  experimentalPaths = false,
 ): LearnPlan {
   const candidates = (raw.memories && raw.memories.length > 0 ? raw.memories : [raw])
     .map((outcome) => forceUpdateIfDuplicate(outcome, existing))
@@ -189,6 +242,7 @@ export function planLearnOutcomes(
   const mutations: FileMutation[] = [];
   const outcomes: LearnOutcome[] = [];
   const conflicts: PathConflict[] = [];
+  const scope_notes: string[] = [];
   let learned = 0;
   let updated = 0;
   let retired = 0;
@@ -210,9 +264,10 @@ export function planLearnOutcomes(
       continue;
     }
 
-    const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays);
+    const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays, trackedFiles, experimentalPaths);
     outcomes.push(planned.outcome);
     mutations.push(...planned.mutations);
+    if (planned.scopeNote) scope_notes.push(planned.scopeNote);
     learned += planned.learned;
     updated += planned.updated;
     retired += planned.retired;
@@ -230,6 +285,7 @@ export function planLearnOutcomes(
     updated,
     retired,
     conflicts,
+    scope_notes,
     distiller: "llm",
     summary: buildSummary(learned, updated, retired, context.number),
   };
@@ -270,7 +326,9 @@ function planOne(
   projectDir: string,
   usedIds: string[],
   ttlDays: number,
-): { outcome: LearnOutcome; mutations: FileMutation[]; learned: number; updated: number; retired: number; usedIds: string[] } {
+  trackedFiles: string[],
+  experimentalPaths: boolean,
+): { outcome: LearnOutcome; mutations: FileMutation[]; learned: number; updated: number; retired: number; usedIds: string[]; scopeNote?: string } {
   const created = isoDate();
   const evidence = {
     pr: `#${context.number}`,
@@ -282,11 +340,24 @@ function planOne(
     const id = generateMemoryId(usedIds);
     const title = outcome.title || firstLine(outcome.body || "Untitled lesson");
     const body = clampBody(outcome.body || title);
+    const resolved = experimentalPaths
+      ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
+      : {
+        paths: outcome.paths?.length ? outcome.paths : inferPathsV02(context.files),
+        source: (outcome.paths?.length ? "distiller" : "inferred") as PathsSource,
+      };
+    const paths = resolved.paths;
+    const prs = distinctEvidencePrs(`#${context.number}`);
+    const requested = outcome.scope ?? defaultScope(paths, body);
+    const gated = gateAlwaysScope(requested, resolved.source, prs);
     const frontmatter: MemoryFrontmatter = {
       id,
       kind: (outcome.kind as MemoryKind) || inferKind(body),
-      paths: outcome.paths && outcome.paths.length > 0 ? outcome.paths : inferPaths(context.files),
-      evidence,
+      paths,
+      paths_source: resolved.source,
+      scope: gated.scope,
+      ...(outcome.triggers && outcome.triggers.length > 0 ? { triggers: outcome.triggers } : {}),
+      evidence: { ...evidence, prs },
       author: context.author || "teamrecall",
       created,
       review_after: reviewAfterDate(created, ttlDays),
@@ -303,6 +374,9 @@ function planOne(
       updated: 0,
       retired: 0,
       usedIds: [id],
+      scopeNote: gated.downgraded
+        ? `${id}: always → triggered (needs evidence from ≥2 distinct PRs unless human-authored; seen ${prs.join(", ")})`
+        : undefined,
     };
   }
 
@@ -337,12 +411,26 @@ function planOne(
     };
   }
 
+  const resolved = outcome.paths && outcome.paths.length > 0
+    ? (experimentalPaths
+      ? resolveMemoryPaths(outcome.paths, trackedFiles, evidenceFiles(context))
+      : { paths: outcome.paths, source: "distiller" as PathsSource })
+    : undefined;
+  const paths = resolved?.paths ?? target.frontmatter.paths;
+  const pathsSource = resolved?.source ?? target.frontmatter.paths_source ?? "human";
+  const prs = distinctEvidencePrs(target.frontmatter.evidence.prs, target.frontmatter.evidence.pr, `#${context.number}`);
+  const requested = outcome.scope ?? target.frontmatter.scope ?? defaultScope(paths, target.body);
+  const gated = gateAlwaysScope(requested, pathsSource, prs);
   const nextFrontmatter: MemoryFrontmatter = {
     ...target.frontmatter,
-    paths: outcome.paths && outcome.paths.length > 0 ? outcome.paths : target.frontmatter.paths,
+    paths,
+    paths_source: pathsSource,
+    scope: gated.scope,
+    triggers: outcome.triggers ?? target.frontmatter.triggers,
     evidence: {
       ...target.frontmatter.evidence,
       ...evidence,
+      prs,
       commits: unique([
         ...(target.frontmatter.evidence.commits ?? []),
         ...evidence.commits,
@@ -358,6 +446,9 @@ function planOne(
     updated: 1,
     retired: 0,
     usedIds: [],
+    scopeNote: gated.downgraded
+      ? `${target.frontmatter.id}: always → triggered (needs evidence from ≥2 distinct PRs unless human-authored; seen ${prs.join(", ")})`
+      : undefined,
   };
 }
 
@@ -399,6 +490,7 @@ export function buildLearnPrBody(plan: LearnPlan, context: PullRequestContext): 
     "Only `.memory/` and compiled agent files are touched.",
     "",
     plan.outcomes.map((outcome) => `- **${outcome.action}** ${outcome.memory_id ?? ""}: ${outcome.reasoning}`).join("\n"),
+    ...scopeNotesSection(plan),
     ...deterministicSection(plan),
     ...conflictSections(plan),
   ].join("\n");
@@ -413,6 +505,11 @@ export const LLM_FAILED_DISTILLER_NOTE = [
   "This run used the **deterministic distiller** because the LLM call failed.",
   "The failure is not the same as having no LLM secret set.",
 ].join("\n");
+
+function scopeNotesSection(plan: LearnPlan): string[] {
+  if (plan.scope_notes.length === 0) return [];
+  return ["", "## Scope", "", ...plan.scope_notes.map((note) => `- ${note}`)];
+}
 
 function deterministicSection(plan: LearnPlan): string[] {
   if (plan.distiller !== "deterministic") return [];
@@ -443,7 +540,6 @@ export function fallbackOutcomeFromReviews(context: PullRequestContext): LearnOu
     action: "new",
     title: firstLine(body),
     kind: inferKind(body),
-    paths: inferPaths(context.files),
     body,
     reasoning: "Deterministic fallback from a review directive",
   };
@@ -461,13 +557,191 @@ function inferKind(body: string): MemoryKind {
   return "convention";
 }
 
-function inferPaths(files: string[]): string[] {
+export function evidenceFiles(context: PullRequestContext): string[] {
+  return context.evidence_files.length > 0 ? context.evidence_files : context.files;
+}
+
+/** Only true repo-wide globs. Extension globs such as star-star/*.test.ts stay specific. */
+export function isRepoWideGlob(glob: string): boolean {
+  const normalized = glob.replaceAll("\\", "/").replace(/\/$/, "");
+  return normalized === "**" || normalized === "**/*" || normalized === "*";
+}
+
+export function isOverlyBroadTopLevel(glob: string): boolean {
+  return isRepoWideGlob(glob);
+}
+
+export function globCoverage(glob: string, files: string[]): number {
+  if (files.length === 0) return 0;
+  return files.filter((file) => globMatches(glob, file)).length / files.length;
+}
+
+export const MAX_INFER_PATH_GLOBS = 5;
+const WORKSPACE_ROOTS = new Set(["packages", "crates", "apps"]);
+
+function deepestCommonDir(files: string[]): string {
+  const parts = files.map((file) => file.split("/").slice(0, -1));
+  if (parts.length === 0) return "";
+  let prefix = parts[0] ?? [];
+  for (const next of parts.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < next.length && prefix[i] === next[i]) i += 1;
+    prefix = prefix.slice(0, i);
+    if (prefix.length === 0) return "";
+  }
+  return prefix.join("/");
+}
+
+function isTooShallow(dir: string): boolean {
+  if (!dir) return true;
+  const parts = dir.split("/").filter(Boolean);
+  return Boolean(WORKSPACE_ROOTS.has(parts[0] ?? "") && parts.length < 2);
+}
+
+function packageDir(file: string): string {
+  const parts = file.split("/");
+  const dirs = parts.slice(0, -1);
+  if (dirs.length === 0) return "";
+  if (WORKSPACE_ROOTS.has(dirs[0] ?? "") && dirs.length >= 2) return `${dirs[0]}/${dirs[1]}`;
+  return dirs.join("/");
+}
+
+function extensionOf(file: string): string {
+  const slash = file.lastIndexOf("/");
+  const dot = file.lastIndexOf(".");
+  return dot > slash ? file.slice(dot) : "";
+}
+
+interface PathGroup {
+  dir: string;
+  files: string[];
+}
+
+function mergeGroups(groups: PathGroup[], max: number): PathGroup[] {
+  let next = [...groups];
+  while (next.length > max) {
+    let bestI = -1;
+    let bestJ = -1;
+    let bestDir = "";
+    let bestDepth = -1;
+    for (let i = 0; i < next.length; i++) {
+      for (let j = i + 1; j < next.length; j++) {
+        const ancestor = deepestCommonDir([...next[i]!.files, ...next[j]!.files]);
+        if (!ancestor || isTooShallow(ancestor)) continue;
+        const depth = ancestor.split("/").length;
+        if (depth > bestDepth) {
+          bestDepth = depth;
+          bestI = i;
+          bestJ = j;
+          bestDir = ancestor;
+        }
+      }
+    }
+    if (bestI < 0) {
+      const ancestor = deepestCommonDir(next.flatMap((group) => group.files));
+      if (ancestor && !isTooShallow(ancestor)) {
+        return [{ dir: ancestor, files: next.flatMap((group) => group.files) }];
+      }
+      next.sort((a, b) => b.files.length - a.files.length || a.dir.localeCompare(b.dir));
+      next = next.slice(0, max);
+      break;
+    }
+    const merged: PathGroup = {
+      dir: bestDir,
+      files: [...next[bestI]!.files, ...next[bestJ]!.files],
+    };
+    next = next.filter((_, index) => index !== bestI && index !== bestJ);
+    next.push(merged);
+  }
+  return next;
+}
+
+/** v0.2 default: top-level directory globs, or repo-wide if only root/dot files. */
+export function inferPathsV02(files: string[]): string[] {
   const dirs = files
     .map((file) => file.split("/")[0])
     .filter((part) => part && !part.startsWith("."));
   const uniqueDirs = unique(dirs).slice(0, 2);
   if (uniqueDirs.length === 0) return ["**/*"];
   return uniqueDirs.map((dir) => `${dir}/**/*`);
+}
+
+export function inferPaths(files: string[], experimental = false): string[] {
+  return experimental ? inferPathsExperimental(files) : inferPathsV02(files);
+}
+
+/** Narrower inference used when experimental.retrieval / --experimental-paths is on. */
+export function inferPathsExperimental(files: string[]): string[] {
+  const normalized = unique(files.map((item) => item.replaceAll("\\", "/")).filter(Boolean));
+  if (normalized.length === 0) return [];
+
+  const globs: string[] = [];
+  const nested: string[] = [];
+  for (const file of normalized) {
+    if (file.includes("/")) nested.push(file);
+    else globs.push(file);
+  }
+
+  if (nested.length > 0) {
+    const common = deepestCommonDir(nested);
+    const groups: PathGroup[] = [];
+    if (common && !isTooShallow(common)) {
+      groups.push({ dir: common, files: nested });
+    } else {
+      const byPackage = new Map<string, string[]>();
+      for (const file of nested) {
+        const dir = packageDir(file);
+        if (!dir) continue;
+        const group = byPackage.get(dir) ?? [];
+        group.push(file);
+        byPackage.set(dir, group);
+      }
+      for (const [dir, groupFiles] of byPackage) groups.push({ dir, files: groupFiles });
+    }
+    const capped = mergeGroups(groups, Math.max(1, MAX_INFER_PATH_GLOBS - globs.length));
+    for (const group of capped) globs.push(`${group.dir}/**`);
+    if (capped.length <= MAX_INFER_PATH_GLOBS) {
+      for (const group of capped) {
+        if (globs.length >= MAX_INFER_PATH_GLOBS) break;
+        const exts = unique(group.files.map(extensionOf).filter(Boolean));
+        if (exts.length === 1) globs.push(`${group.dir}/**/*${exts[0]}`);
+      }
+    }
+  }
+
+  return unique(globs).slice(0, MAX_INFER_PATH_GLOBS);
+}
+
+export function resolveMemoryPaths(
+  proposed: string[] | undefined,
+  tracked: string[],
+  evidence: string[],
+): { paths: string[]; source: PathsSource } {
+  const candidates = unique((proposed ?? []).map((glob) => glob.replaceAll("\\", "/")));
+  if (candidates.length === 0) return { paths: inferPathsExperimental(evidence), source: "inferred" };
+  const universe = unique([...tracked, ...evidence]);
+  const specific: string[] = [];
+  let sawRepoWide = false;
+  for (const glob of candidates) {
+    if (isRepoWideGlob(glob)) {
+      sawRepoWide = true;
+      continue;
+    }
+    if (universe.length === 0 || universe.some((file) => globMatches(glob, file))) {
+      specific.push(glob);
+    }
+  }
+  if (specific.length > 0) return { paths: specific, source: "distiller" };
+  if (sawRepoWide) return { paths: ["**"], source: "distiller" };
+  return { paths: inferPathsExperimental(evidence), source: "inferred" };
+}
+
+export function keepSpecificPaths(
+  proposed: string[] | undefined,
+  tracked: string[],
+  evidence: string[],
+): string[] {
+  return resolveMemoryPaths(proposed, tracked, evidence).paths;
 }
 
 function summarizeAction(outcomes: LearnOutcome[]): LearnOutcome["action"] {

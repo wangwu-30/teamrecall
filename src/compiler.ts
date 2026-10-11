@@ -90,8 +90,12 @@ export function generateCompactIndex(active: Memory[], abandoned: Memory[] = [])
   const footer = ["", "See `.memory/INDEX.md` for full details.", CLAUDE_INDEX_IMPORT];
   const reserved = header.length + footer.length + (abandoned.length > 0 ? 3 : 0);
   const items: string[] = [];
+  const ordered = [
+    ...active.filter((memory) => memory.frontmatter.scope === "always"),
+    ...active.filter((memory) => memory.frontmatter.scope !== "always"),
+  ];
 
-  for (const memory of active) {
+  for (const memory of ordered) {
     items.push(compactLine(memory));
     if (reserved + items.length + 1 > AGENTS_INDEX_MAX_LINES) {
       items.pop();
@@ -121,7 +125,11 @@ export function generateAgentsMdBlock(memories: Memory[]): string {
   return generateCompactIndex(active, abandoned);
 }
 
-function compactLine(memory: Memory): string {
+export function compactLine(memory: Memory): string {
+  if (memory.frontmatter.scope === "always") {
+    const oneLiner = memory.body.replace(/\s+/g, " ").trim();
+    return `- **${memory.frontmatter.id}** [always]: ${oneLiner}`;
+  }
   const title = extractTitle(memory.body);
   const paths = memory.frontmatter.paths.length > 0
     ? ` (${memory.frontmatter.paths.slice(0, 2).join(", ")})`
@@ -129,14 +137,21 @@ function compactLine(memory: Memory): string {
   return `- **${memory.frontmatter.id}**: ${title}${paths}`;
 }
 
+export function indexIsCapped(block: string): boolean {
+  return block.includes("…and ");
+}
+
 function generateClaudeRules(memories: Memory[]): Map<string, string> {
   const rules = new Map<string, string>();
 
   for (const memory of memories) {
+    const explicitAlways = memory.frontmatter.scope === "always";
     const paths = memory.frontmatter.paths;
-    const frontmatter = paths.length > 0
-      ? ["---", "paths:", ...paths.map((glob) => `  - ${JSON.stringify(glob)}`), "---"].join("\n")
-      : "---\n---";
+    const frontmatter = explicitAlways
+      ? ["---", "paths:", '  - "**"', "---"].join("\n")
+      : paths.length > 0
+        ? ["---", "paths:", ...paths.map((glob) => `  - ${JSON.stringify(glob)}`), "---"].join("\n")
+        : "---\n---";
 
     const content = [
       frontmatter,
@@ -161,18 +176,19 @@ function generateCursorRules(memories: Memory[]): Map<string, string> {
   for (const memory of memories) {
     const title = extractTitle(memory.body);
     const paths = memory.frontmatter.paths;
-    const frontmatter = paths.length > 0
+    const always = memory.frontmatter.scope === "always" || paths.length === 0;
+    const frontmatter = always
       ? [
           "---",
           `description: ${JSON.stringify(`${memory.frontmatter.id}: ${title}`)}`,
-          `globs: ${paths.join(", ")}`,
-          "alwaysApply: false",
+          "alwaysApply: true",
           "---",
         ].join("\n")
       : [
           "---",
           `description: ${JSON.stringify(`${memory.frontmatter.id}: ${title}`)}`,
-          "alwaysApply: true",
+          `globs: ${paths.join(", ")}`,
+          "alwaysApply: false",
           "---",
         ].join("\n");
 

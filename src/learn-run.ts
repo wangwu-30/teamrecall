@@ -22,6 +22,7 @@ import {
   type LearnPlan,
 } from "./learn.js";
 import { loadConfig, loadMemories } from "./memory.js";
+import { listRepoFiles } from "./sweep.js";
 import type { LearnOutcome, PullRequestContext } from "./types.js";
 
 export interface LearnRunDeps {
@@ -113,6 +114,7 @@ export async function runLearn(input: {
   pr: string;
   openPr?: boolean;
   ci?: boolean;
+  experimentalPaths?: boolean;
   deps?: LearnRunDeps;
 }): Promise<LearnRunResult> {
   const projectDir = path.resolve(input.projectDir);
@@ -135,6 +137,7 @@ export async function runLearn(input: {
         updated: 0,
         retired: 0,
         conflicts: [],
+        scope_notes: [],
         distiller: "llm",
         summary: `skipped unmerged #${context.number} (no human review comments)`,
       },
@@ -157,6 +160,7 @@ export async function runLearn(input: {
         updated: 0,
         retired: 0,
         conflicts: [],
+        scope_notes: [],
         distiller: "llm",
         summary: `recompiled from #${context.number}`,
       },
@@ -168,6 +172,7 @@ export async function runLearn(input: {
 
   const memories = await loadMemories(projectDir);
   const config = await loadConfig(projectDir);
+  const experimentalPaths = Boolean(input.experimentalPaths || config.experimental?.retrieval);
   const prompt = generateDistillationPrompt({
     pr_number: context.number,
     diff: context.diff,
@@ -203,7 +208,8 @@ export async function runLearn(input: {
     }
   }
 
-  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days);
+  const trackedFiles = await listRepoFiles(projectDir);
+  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths);
   plan.distiller = distiller;
   plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);

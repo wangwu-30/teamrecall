@@ -16,6 +16,11 @@ import {
   fallbackOutcomeFromReviews,
   forceUpdateIfDuplicate,
   generateDistillationPrompt,
+  inferPaths,
+  inferPathsExperimental,
+  inferPathsV02,
+  keepSpecificPaths,
+  resolveMemoryPaths,
   parseDistillationResponse,
   planLearnOutcomes,
 } from "./learn.js";
@@ -66,6 +71,7 @@ function context(partial: Partial<PullRequestContext> = {}): PullRequestContext 
     commit_messages: ["fix ci: register retry in wrapper"],
     commits: ["abc123"],
     files: ["src/gateway.ts"],
+    evidence_files: [],
     ...partial,
     review_comments: partial.review_comments ?? review_comments,
     human_review_comments: partial.human_review_comments ?? partial.review_comments ?? review_comments,
@@ -88,6 +94,25 @@ describe("parseDistillationResponse", () => {
     expect(parsed.paths).toEqual(["src/gateway/**"]);
   });
 
+  it("maps applies_to onto paths", () => {
+    const parsed = parseDistillationResponse(`{"action":"new","reasoning":"x","applies_to":["**/*.test.ts"],"scope":"triggered"}`);
+    expect(parsed.paths).toEqual(["**/*.test.ts"]);
+    expect(parsed.scope).toBe("triggered");
+  });
+
+  it("copies applies_to onto paths for every memories[] entry", () => {
+    const parsed = parseDistillationResponse(JSON.stringify({
+      action: "new",
+      reasoning: "two lessons",
+      memories: [
+        { action: "new", reasoning: "a", applies_to: ["src/auth/**"], title: "Auth", body: "Keep auth cookies httpOnly." },
+        { action: "new", reasoning: "b", applies_to: ["docs/**"], title: "Docs", body: "Mention the change in docs." },
+      ],
+    }));
+    expect(parsed.memories?.[0]?.paths).toEqual(["src/auth/**"]);
+    expect(parsed.memories?.[1]?.paths).toEqual(["docs/**"]);
+  });
+
   it("returns no_op for invalid JSON or unknown action", () => {
     expect(parseDistillationResponse("not json").action).toBe("no_op");
     expect(parseDistillationResponse('{"action":"explode","reasoning":"x"}').action).toBe("no_op");
@@ -106,6 +131,130 @@ describe("generateDistillationPrompt", () => {
     });
     expect(prompt).toContain("M-001");
     expect(prompt).toContain("no_op");
+    expect(prompt).toContain("applies_to");
+    expect(prompt).toContain('"scope": "always|triggered"');
+    expect(prompt).toContain("triggers");
+    expect(prompt).toContain("src/auth/**");
+    expect(prompt).toContain("docs/**");
+    expect(prompt).not.toMatch(/changeset|mdtest|vitest|biome|ruff|tldraw/i);
+  });
+});
+
+describe("inferPaths", () => {
+  it("defaults to v0.2 top-level dir/**/* (or **/* for root/dot-only files)", () => {
+    expect(inferPaths([".changeset/loose-hats-cough.md"])).toEqual(["**/*"]);
+    expect(inferPaths([
+      "crates/ruff_linter/src/rules/a.rs",
+      "crates/ruff_linter/resources/mdtest/b.md",
+    ])).toEqual(["crates/**/*"]);
+    expect(inferPaths([
+      "crates/biome_service/src/a.rs",
+      "crates/biome_languages/src/b.rs",
+    ])).toEqual(["crates/**/*"]);
+    expect(inferPaths(["src/gateway.ts", "docs/readme.md"])).toEqual(["src/**/*", "docs/**/*"]);
+    expect(inferPaths(["README.md"])).toEqual(["README.md/**/*"]);
+    expect(inferPaths([])).toEqual(["**/*"]);
+    expect(inferPathsV02(["src/gateway.ts"])).toEqual(["src/**/*"]);
+  });
+});
+
+describe("inferPaths experimental", () => {
+  it("uses deepest common dir/** plus extension, keeps dot-directories", () => {
+    const globs = inferPathsExperimental([".changeset/loose-hats-cough.md"]);
+    expect(globs).toContain(".changeset/**");
+    expect(globs).toContain(".changeset/**/*.md");
+    expect(globs).not.toContain(".changeset/*");
+    expect(inferPaths([".changeset/loose-hats-cough.md"], true)).toEqual(globs);
+  });
+
+  it("uses the deepest common dir but never shallower than the package dir", () => {
+    expect(inferPathsExperimental([
+      "crates/ruff_linter/src/rules/a.rs",
+      "crates/ruff_linter/resources/mdtest/b.md",
+    ])).toEqual(["crates/ruff_linter/**"]);
+  });
+
+  it("does not collapse a monorepo to crates/** or packages/**", () => {
+    expect(inferPathsExperimental([
+      "crates/biome_service/src/a.rs",
+      "crates/biome_languages/src/b.rs",
+    ])).toEqual(expect.arrayContaining([
+      "crates/biome_service/**",
+      "crates/biome_languages/**",
+    ]));
+    expect(inferPathsExperimental([
+      "crates/biome_service/src/a.rs",
+      "crates/biome_languages/src/b.rs",
+    ])).not.toContain("crates/**");
+    expect(inferPathsExperimental([
+      "packages/vitest/src/node/cli.ts",
+      "packages/browser/src/client.ts",
+    ])).toEqual(expect.arrayContaining([
+      "packages/vitest/**",
+      "packages/browser/**",
+    ]));
+    expect(inferPathsExperimental([
+      "packages/vitest/src/node/cli.ts",
+      "packages/browser/src/client.ts",
+    ])).not.toContain("packages/**");
+  });
+
+  it("merges many sibling dirs to their common ancestor then caps at MAX_INFER_PATH_GLOBS", () => {
+    const siblings = inferPathsExperimental(Array.from({ length: 7 }, (_, i) => `src/mod${i}/f.ts`));
+    expect(siblings).toEqual(["src/**", "src/**/*.ts"]);
+    const sixUnrelated = inferPathsExperimental([
+      "a/x/1.ts", "a/x/2.ts", "b/x/1.ts", "c/x/1.ts", "d/x/1.ts", "e/x/1.ts", "f/x/1.ts",
+    ]);
+    expect(sixUnrelated.length).toBeLessThanOrEqual(5);
+    expect(sixUnrelated).toContain("a/x/**");
+    expect(sixUnrelated).not.toContain("**");
+    expect(sixUnrelated).not.toContain("**/*");
+  });
+
+  it("caps inferred globs after merge and leaves root files exact", () => {
+    const many = inferPathsExperimental(Array.from({ length: 12 }, (_, i) => `d${i}/x/f${i}.ts`).concat(["README.md"]));
+    expect(many.length).toBeLessThanOrEqual(5);
+    expect(many).toContain("README.md");
+    expect(inferPathsExperimental(["README.md"])).toEqual(["README.md"]);
+    expect(inferPathsExperimental([])).toEqual([]);
+  });
+
+  it("keeps package-level applies_to and explicit repo-wide **", () => {
+    expect(keepSpecificPaths(
+      [".changeset/*.md"],
+      [".changeset/loose-hats-cough.md", "crates/foo.rs"],
+      [".changeset/loose-hats-cough.md"],
+    )).toEqual([".changeset/*.md"]);
+    expect(keepSpecificPaths(
+      ["src/**"],
+      ["src/a.ts", "src/b/c.ts"],
+      ["src/a.ts"],
+    )).toEqual(["src/**"]);
+    expect(keepSpecificPaths(
+      ["**"],
+      ["a/x.ts", "b/y.ts", "c/z.ts"],
+      ["a/x.ts"],
+    )).toEqual(["**"]);
+    expect(keepSpecificPaths(
+      ["**/*"],
+      ["a/x.ts", "b/y.ts"],
+      ["a/x.ts"],
+    )).toEqual(["**"]);
+    expect(keepSpecificPaths(
+      ["**/*.test.ts"],
+      ["src/a.test.ts", "src/a.ts"],
+      ["src/a.test.ts"],
+    )).toEqual(["**/*.test.ts"]);
+    expect(keepSpecificPaths(
+      ["**/*.ts", "**/*.tsx"],
+      ["src/a.ts", "src/b.tsx"],
+      ["src/a.ts"],
+    )).toEqual(["**/*.ts", "**/*.tsx"]);
+    expect(resolveMemoryPaths(["**/*.test.ts"], ["src/a.test.ts"], ["src/a.test.ts"])).toEqual({
+      paths: ["**/*.test.ts"],
+      source: "distiller",
+    });
+    expect(resolveMemoryPaths(undefined, [], ["src/a.ts"]).source).toBe("inferred");
   });
 });
 
@@ -141,6 +290,145 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     }, existing);
     expect(forced.action).toBe("update");
     expect(forced.memory_id).toBe("M-012");
+  });
+
+  it("keeps explicit ** as repo-wide instead of narrowing to evidence", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Process rule",
+      body: "Mention the change in every PR.",
+      paths: ["**"],
+      reasoning: "repo-wide process",
+    }, [], context({ files: ["a/x.ts"], evidence_files: ["a/x.ts"] }), "/tmp/project");
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.paths).toEqual(["**"]);
+    expect(parsed?.frontmatter.paths_source).toBe("distiller");
+    expect(parsed?.frontmatter.scope).toBe("triggered");
+    expect(planned.scope_notes.join(" ")).toMatch(/always → triggered/);
+    expect(buildLearnPrBody(planned, context())).toMatch(/always → triggered/);
+  });
+
+  it("allows always only after two distinct PRs or when human-authored", () => {
+    const first = planLearnOutcomes({
+      action: "new",
+      title: "Process rule",
+      body: "Mention the change in every PR.",
+      paths: ["**"],
+      scope: "always",
+      reasoning: "first sighting",
+    }, [], context({ number: "10", files: ["a/x.ts"] }), "/tmp/project");
+    const firstParsed = parseMemory(first.mutations[0]?.content ?? "");
+    expect(firstParsed?.frontmatter.scope).toBe("triggered");
+
+    const existing = [{
+      ...memory("M-001", "Mention the change in every PR.", ["**"]),
+      frontmatter: {
+        ...memory("M-001", "Mention the change in every PR.", ["**"]).frontmatter,
+        scope: "triggered" as const,
+        paths_source: "distiller" as const,
+        evidence: { pr: "#10", prs: ["#10"] },
+      },
+    }];
+    const second = planLearnOutcomes({
+      action: "update",
+      memory_id: "M-001",
+      scope: "always",
+      body: "Mention the change in every PR.",
+      reasoning: "recurred",
+    }, existing, context({ number: "22" }), "/tmp/project");
+    const secondParsed = parseMemory(second.mutations[0]?.content ?? "");
+    expect(secondParsed?.frontmatter.scope).toBe("always");
+    expect(secondParsed?.frontmatter.evidence.prs).toEqual(["#10", "#22"]);
+
+    const human = planLearnOutcomes({
+      action: "update",
+      memory_id: "M-001",
+      scope: "always",
+      body: "Mention the change in every PR.",
+      reasoning: "hand-written",
+    }, [{
+      ...memory("M-001", "Mention the change in every PR.", ["**"]),
+      frontmatter: {
+        ...memory("M-001", "Mention the change in every PR.", ["**"]).frontmatter,
+        paths_source: "human" as const,
+        evidence: { pr: "#10", prs: ["#10"] },
+      },
+    }], context({ number: "10" }), "/tmp/project");
+    expect(parseMemory(human.mutations[0]?.content ?? "")?.frontmatter.scope).toBe("always");
+  });
+
+  it("keeps extension globs as triggered distiller paths", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Test files",
+      body: "Keep tests next to the code they cover.",
+      paths: ["**/*.test.ts"],
+      reasoning: "test glob",
+    }, [], context({ files: ["src/a.test.ts"], evidence_files: ["src/a.test.ts"] }), "/tmp/project");
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.paths).toEqual(["**/*.test.ts"]);
+    expect(parsed?.frontmatter.scope).toBe("triggered");
+    expect(parsed?.frontmatter.paths_source).toBe("distiller");
+  });
+
+  it("records inferred provenance when the distiller omitted applies_to", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Gateway retries",
+      body: "Register retries only in the gateway wrapper.",
+      reasoning: "no applies_to",
+    }, [], context({ files: ["src/gateway.ts"], evidence_files: ["src/gateway.ts"] }), "/tmp/project");
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.paths_source).toBe("inferred");
+    expect(parsed?.frontmatter.paths).toEqual(["src/**/*"]);
+    expect(parsed?.frontmatter.scope).toBe("triggered");
+  });
+
+  it("uses narrower experimental inference only when asked", () => {
+    const files = ["crates/ruff_linter/src/rules/a.rs", "crates/ruff_linter/resources/mdtest/b.md"];
+    const outcome = {
+      action: "new" as const,
+      title: "Ruff lint",
+      body: "Keep ruff lint rules next to the crate they belong to.",
+      reasoning: "no applies_to",
+    };
+    const def = planLearnOutcomes(outcome, [], context({ files, evidence_files: files }), "/tmp/project");
+    expect(parseMemory(def.mutations[0]?.content ?? "")?.frontmatter.paths).toEqual(["crates/**/*"]);
+
+    const experimental = planLearnOutcomes(
+      outcome,
+      [],
+      context({ files, evidence_files: files }),
+      "/tmp/project",
+      90,
+      files,
+      true,
+    );
+    expect(parseMemory(experimental.mutations[0]?.content ?? "")?.frontmatter.paths).toEqual(["crates/ruff_linter/**"]);
+  });
+
+  it("honors distiller applies_to on the default path", () => {
+    const planned = planLearnOutcomes({
+      action: "new",
+      title: "Auth cookies",
+      body: "Keep auth cookies httpOnly and never store them in localStorage.",
+      applies_to: ["src/auth/**"],
+      paths: ["src/auth/**"],
+      reasoning: "distiller owned the glob",
+    }, [], context({ files: ["docs/readme.md"] }), "/tmp/project");
+    expect(parseMemory(planned.mutations[0]?.content ?? "")?.frontmatter.paths).toEqual(["src/auth/**"]);
+  });
+
+  it("writes paths_source on update when a legacy memory omitted it", () => {
+    const existing = [memory("M-003", "Old rule about retries in the gateway wrapper.", ["src/gateway/**"])];
+    const planned = planLearnOutcomes({
+      action: "update",
+      memory_id: "M-003",
+      body: "Register retries only in the gateway wrapper.",
+      reasoning: "strengthen",
+    }, existing, context(), "/tmp/project");
+    const parsed = parseMemory(planned.mutations[0]?.content ?? "");
+    expect(parsed?.frontmatter.paths_source).toBe("human");
   });
 
   it("plans a new memory file and caps writes at 3", () => {
@@ -349,6 +637,62 @@ describe("runLearn", () => {
     const parsed = parseMemory(await fs.readFile(path.join(dir, ".memory", "memories", files[0]), "utf8"));
     expect(parsed?.frontmatter.evidence.pr).toBe("#42");
     expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).toContain("M-001");
+  });
+
+  it("uses v0.2 inferPaths by default and experimental inference from config or flag", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-infer-default-"));
+    dirs.push(dir);
+    await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
+    const files = ["crates/ruff_linter/src/rules/a.rs", "crates/ruff_linter/resources/mdtest/b.md"];
+    const distill = async () => JSON.stringify({
+      action: "new",
+      title: "Ruff lint",
+      kind: "convention",
+      body: "Keep ruff lint rules next to the crate they belong to.",
+      reasoning: "no applies_to",
+    });
+    const fetchPr = async () => context({ files, evidence_files: files });
+
+    const def = await runLearn({
+      projectDir: dir,
+      pr: "42",
+      openPr: false,
+      deps: { fetchPr, distill },
+    });
+    expect(def.plan.learned).toBe(1);
+    const defaultFile = (await fs.readdir(path.join(dir, ".memory", "memories")))[0];
+    expect(parseMemory(await fs.readFile(path.join(dir, ".memory", "memories", defaultFile), "utf8"))?.frontmatter.paths)
+      .toEqual(["crates/**/*"]);
+
+    const flagged = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-infer-flag-"));
+    dirs.push(flagged);
+    await fs.mkdir(path.join(flagged, ".memory", "memories"), { recursive: true });
+    const fromFlag = await runLearn({
+      projectDir: flagged,
+      pr: "42",
+      openPr: false,
+      experimentalPaths: true,
+      deps: { fetchPr, distill },
+    });
+    expect(fromFlag.plan.learned).toBe(1);
+    const flagFile = (await fs.readdir(path.join(flagged, ".memory", "memories")))[0];
+    expect(parseMemory(await fs.readFile(path.join(flagged, ".memory", "memories", flagFile), "utf8"))?.frontmatter.paths)
+      .toEqual(["crates/ruff_linter/**"]);
+
+    const configured = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-infer-config-"));
+    dirs.push(configured);
+    await fs.mkdir(path.join(configured, ".memory", "memories"), { recursive: true });
+    await fs.writeFile(path.join(configured, ".memory", "config.yml"), "experimental:\n  retrieval: true\n", "utf8");
+    const fromConfig = await runLearn({
+      projectDir: configured,
+      pr: "42",
+      openPr: false,
+      deps: { fetchPr, distill },
+    });
+    expect(fromConfig.plan.learned).toBe(1);
+    const configFile = (await fs.readdir(path.join(configured, ".memory", "memories")))[0];
+    expect(parseMemory(await fs.readFile(path.join(configured, ".memory", "memories", configFile), "utf8"))?.frontmatter.paths)
+      .toEqual(["crates/ruff_linter/**"]);
   });
 
   it("recompiles only when the merged PR is already a teamrecall PR", async () => {

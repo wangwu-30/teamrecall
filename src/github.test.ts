@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   GIT_AUTHOR_NAME,
   MANAGED_GIT_PATHS,
+  authoredCommentApiArgs,
+  evidenceFilesFromComments,
   gitIdentityArgs,
   gitPushArgs,
   openPullRequest,
@@ -36,6 +38,17 @@ describe("git identity and staging", () => {
     expect(args).toContain("user.name=github-actions[bot]");
     expect(args.join(" ")).toContain(GIT_AUTHOR_NAME);
     expect(args.join(" ")).toContain("41898282+github-actions[bot]@users.noreply.github.com");
+  });
+
+  it("collects evidence files from human comments only and paginates gh api", () => {
+    expect(evidenceFilesFromComments([
+      { body: "bot nit", author: "copilot", user_type: "Bot", path: "src/bot.ts" },
+      { body: "human", author: "alice", user_type: "User", path: ".changeset/a.md" },
+      { body: "also human", author: "bob", path: "src/a.ts" },
+    ])).toEqual([".changeset/a.md", "src/a.ts"]);
+    const args = authoredCommentApiArgs("repos/{owner}/{repo}/pulls/1/comments");
+    expect(args).toContain("--paginate");
+    expect(args[0]).toBe("api");
   });
 
   it("includes teamrecall workflow files in the managed commit", () => {

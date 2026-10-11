@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import * as path from "node:path";
 import { exists } from "./utils/atomic.js";
 import { getCurrentBranch, gitHasRemote } from "./utils/git.js";
-import { humanCommentBodies, type AuthoredComment } from "./human-comments.js";
+import { humanCommentBodies, isBotAuthor, type AuthoredComment } from "./human-comments.js";
 import type { PullRequestContext } from "./types.js";
 
 const exec = promisify(execFile);
@@ -52,6 +52,7 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
 
   const authored = await fetchAuthoredComments(pr, cwd);
   const human_review_comments = humanCommentBodies(authored);
+  const evidence_files = evidenceFilesFromComments(authored);
   const merged = Boolean(view.mergedAt) || view.state === "MERGED";
   const review_comments = merged
     ? unique(authored.map((comment) => comment.body.trim()).filter(Boolean))
@@ -74,7 +75,38 @@ export async function fetchPullRequest(pr: string, cwd: string): Promise<PullReq
     commit_messages,
     commits,
     files: (view.files ?? []).map((file) => file.path).filter((item): item is string => Boolean(item)),
+    evidence_files,
   };
+}
+
+export function evidenceFilesFromComments(comments: AuthoredComment[]): string[] {
+  return unique(
+    comments
+      .filter((comment) => comment.path && !isBotAuthor(comment.author, comment.user_type))
+      .map((comment) => comment.path as string),
+  );
+}
+
+export const AUTHORED_COMMENT_JQ =
+  ".[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type, path: .path}";
+
+export function authoredCommentApiArgs(endpoint: string): string[] {
+  return ["api", "--paginate", endpoint, "--jq", AUTHORED_COMMENT_JQ];
+}
+
+function parseNdjsonComments(raw: string): AuthoredComment[] {
+  const rows: AuthoredComment[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const row = JSON.parse(trimmed) as AuthoredComment;
+      if (row.body?.trim()) rows.push(row);
+    } catch {
+      // Paginated gh output can include a leftover array; ignore junk lines.
+    }
+  }
+  return rows;
 }
 
 export async function fetchAuthoredComments(pr: string, cwd: string): Promise<AuthoredComment[]> {
@@ -86,12 +118,7 @@ export async function fetchAuthoredComments(pr: string, cwd: string): Promise<Au
   ];
   for (const endpoint of endpoints) {
     try {
-      const rows = JSON.parse(await run("gh", [
-        "api",
-        endpoint,
-        "--jq", "[.[] | select(.body != null and .body != \"\") | {body, author: .user.login, user_type: .user.type}]",
-      ], cwd)) as AuthoredComment[];
-      comments.push(...rows.filter((comment) => comment.body?.trim()));
+      comments.push(...parseNdjsonComments(await run("gh", authoredCommentApiArgs(endpoint), cwd)));
     } catch {
       // Fine when the token cannot read that collection.
     }

@@ -7,8 +7,10 @@ import {
   countWords,
   formatMemory,
   generateMemoryId,
+  defaultScope,
   isValidFrontmatter,
   loadMemories,
+  memoryScope,
   parseMemory,
   reviewAfterDate,
   slugify,
@@ -86,6 +88,46 @@ Body`;
     })).toBe(false);
   });
 
+  it("accepts scope and triggers and rejects invalid ones", () => {
+    const base = {
+      id: "M-010",
+      kind: "convention",
+      paths: [".changeset/*.md"],
+      author: "a",
+      created: "2026-10-10",
+      review_after: "2027-01-08",
+      status: "active",
+    };
+    expect(isValidFrontmatter({
+      ...base,
+      scope: "triggered",
+      triggers: [{ glob: ".changeset/*.md", contains: "changeset" }],
+    })).toBe(true);
+    expect(isValidFrontmatter({ ...base, scope: "always" })).toBe(true);
+    expect(isValidFrontmatter({ ...base, scope: "sometimes" })).toBe(false);
+    expect(isValidFrontmatter({ ...base, paths_source: "distiller" })).toBe(true);
+    expect(isValidFrontmatter({ ...base, paths_source: "guessed" })).toBe(false);
+    expect(isValidFrontmatter({ ...base, triggers: [{ contains: "x" }] })).toBe(false);
+    expect(parseMemory(`---
+id: M-010
+kind: convention
+paths: [".changeset/*.md"]
+scope: triggered
+triggers:
+  - glob: ".changeset/*.md"
+    contains: changeset
+author: a
+created: "2026-10-10"
+review_after: "2027-01-08"
+status: active
+---
+
+Every user-facing change needs a changeset.
+`)).toMatchObject({
+      frontmatter: { scope: "triggered" },
+    });
+  });
+
   it("rejects an id that is not M-digits", () => {
     expect(isValidFrontmatter({
       id: "memory-1",
@@ -96,6 +138,48 @@ Body`;
       review_after: "2027-01-08",
       status: "active",
     })).toBe(false);
+  });
+});
+
+describe("defaultScope", () => {
+  it("defaults to always only for repo-wide paths; body text does not decide scope", () => {
+    expect(defaultScope(["**/*"], "A specific file rule")).toBe("always");
+    expect(defaultScope(["src/auth/**"], "Mention the change in the PR description.")).toBe("triggered");
+    expect(defaultScope(["src/auth/**"], "Register retries only in the gateway.")).toBe("triggered");
+    expect(defaultScope(["src/x.ts"], "Address review comments by adding a test")).toBe("triggered");
+    expect(defaultScope(["packages/a/*"], "Keep code comments brief; no narration")).toBe("triggered");
+    expect(defaultScope(["src/x.ts"], "Please disclose AI usage in the PR body")).toBe("triggered");
+    expect(defaultScope(["src/helpers.rs"], "See the PR description for how this helper is used.")).toBe("triggered");
+    expect(defaultScope([], "No evidence files")).toBe("triggered");
+    expect(memoryScope({
+      frontmatter: {
+        id: "M-009",
+        kind: "convention",
+        paths: ["src/**"],
+        scope: "triggered",
+        evidence: {},
+        author: "a",
+        created: "2026-10-10",
+        review_after: "2027-01-08",
+        status: "active",
+      },
+      body: "Please disclose AI usage even though this looks process-like.",
+      filepath: "/tmp/M-009.md",
+    })).toBe("triggered");
+    expect(memoryScope({
+      frontmatter: {
+        id: "M-001",
+        kind: "convention",
+        paths: [".changeset/*.md"],
+        evidence: {},
+        author: "a",
+        created: "2026-10-10",
+        review_after: "2027-01-08",
+        status: "active",
+      },
+      body: "Every user-facing change needs a changeset.",
+      filepath: "/tmp/M-001.md",
+    })).toBe("triggered");
   });
 });
 

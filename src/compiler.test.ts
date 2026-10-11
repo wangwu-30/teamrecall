@@ -12,6 +12,8 @@ function memory(partial: Partial<Memory["frontmatter"]> & { id: string; body?: s
       id: partial.id,
       kind: partial.kind ?? "gotcha",
       paths: partial.paths ?? ["src/**/*.ts"],
+      scope: partial.scope,
+      triggers: partial.triggers,
       evidence: partial.evidence ?? { pr: "#42" },
       author: partial.author ?? "alice",
       created: partial.created ?? "2026-10-10",
@@ -83,6 +85,20 @@ describe("compileMemories", () => {
     expect(claudeRule).toContain("# M-001: Retry Logic");
   });
 
+  it("compiles existing unscoped memories like v0.2 path-scoped rules", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({ id: "M-001", paths: ["src/**/*.ts", "lib/**/*.ts"] }),
+    ]);
+    expect(compiled.agents_md).toContain("**M-001**: Use retries only in the gateway wrapper. (src/**/*.ts, lib/**/*.ts)");
+    expect(compiled.agents_md).not.toContain("[always]");
+    const claudeRule = compiled.claude_rules.get("M-001.md");
+    expect(claudeRule).toContain('- "src/**/*.ts"');
+    expect(claudeRule).not.toContain('- "**"');
+    const cursorRule = compiled.cursor_rules.get("teamrecall-M-001.mdc");
+    expect(cursorRule).toContain("globs: src/**/*.ts, lib/**/*.ts");
+    expect(cursorRule).toContain("alwaysApply: false");
+  });
+
   it("generates Cursor rules with comma-separated globs and alwaysApply", async () => {
     const compiled = await compileMemories("/tmp", [
       memory({ id: "M-001", paths: ["src/**/*.ts", "lib/**/*.ts"] }),
@@ -91,6 +107,76 @@ describe("compileMemories", () => {
     expect(cursorRule).toContain("globs: src/**/*.ts, lib/**/*.ts");
     expect(cursorRule).toContain("alwaysApply: false");
     expect(cursorRule).toContain('description: "M-001:');
+  });
+
+  it("puts always memories in the root index as full one-liners and triggered as titles", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-001",
+        scope: "always",
+        paths: ["**/*"],
+        body: "Keep review comments short. Do not paste a whole function into a PR comment.",
+      }),
+      memory({
+        id: "M-002",
+        scope: "triggered",
+        paths: [".changeset/*.md"],
+        body: "Every user-facing change needs a changeset file.",
+      }),
+    ]);
+    expect(compiled.agents_md).toContain("[always]: Keep review comments short.");
+    expect(compiled.agents_md).toContain("**M-002**: Every user-facing change needs a changeset file.");
+    expect(compiled.agents_md).not.toContain("[always]: Every user-facing change");
+    const alwaysRule = compiled.claude_rules.get("M-001.md");
+    expect(alwaysRule).toContain('- "**"');
+    const triggered = compiled.claude_rules.get("M-002.md");
+    expect(triggered).toContain('- ".changeset/*.md"');
+    expect(compiled.cursor_rules.get("teamrecall-M-001.mdc")).toContain("alwaysApply: true");
+    expect(compiled.cursor_rules.get("teamrecall-M-002.mdc")).toContain("globs: .changeset/*.md");
+    expect(compiled.cursor_rules.get("teamrecall-M-002.mdc")).toContain("alwaysApply: false");
+  });
+
+  it("compiles empty-path memories as always only when scope is always", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-004",
+        scope: "always",
+        paths: [],
+        body: "Mention the change in every PR description.",
+      }),
+    ]);
+    expect(compiled.claude_rules.get("M-004.md")).toContain('- "**"');
+    expect(compiled.cursor_rules.get("teamrecall-M-004.mdc")).toContain("alwaysApply: true");
+  });
+
+  it("compiles an unscoped empty-path memory like v0.2 (Claude everywhere, Cursor alwaysApply)", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-003",
+        paths: [],
+        body: "Keep review comments short. Do not paste a whole function into a PR comment.",
+      }),
+    ]);
+    expect(compiled.agents_md).toContain("**M-003**: Keep review comments short.");
+    expect(compiled.agents_md).not.toContain("[always]");
+    expect(compiled.claude_rules.get("M-003.md")?.startsWith("---\n---\n")).toBe(true);
+    expect(compiled.claude_rules.get("M-003.md")).not.toContain("paths:");
+    expect(compiled.cursor_rules.get("teamrecall-M-003.mdc")).toContain("alwaysApply: true");
+    expect(compiled.cursor_rules.get("teamrecall-M-003.mdc")).not.toContain("globs:");
+  });
+
+  it("still writes rule files for triggered memories with empty paths", async () => {
+    const compiled = await compileMemories("/tmp", [
+      memory({
+        id: "M-003",
+        scope: "triggered",
+        paths: [],
+        body: "No evidence, so this still compiles like v0.2 empty paths.",
+      }),
+    ]);
+    expect(compiled.agents_md).toContain("**M-003**: No evidence, so this still compiles like v0.2 empty paths.");
+    expect(compiled.claude_rules.get("M-003.md")?.startsWith("---\n---\n")).toBe(true);
+    expect(compiled.cursor_rules.get("teamrecall-M-003.mdc")).toContain("alwaysApply: true");
   });
 
   it("keeps the AGENTS.md index at or under 40 lines", async () => {
