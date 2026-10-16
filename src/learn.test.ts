@@ -786,7 +786,7 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
     expect(buildLearnPrTitle(0, 0, "9", 0)).toBe("🧠 teamrecall: no-op (from #9)");
   });
 
-  it("plans a retire by moving the file", () => {
+  it("plans retirement in place to reserve its identity", () => {
     const existing = [memory("M-003", "Old rule.")];
     const planned = planLearnOutcomes({
       action: "propose_retire",
@@ -794,7 +794,8 @@ describe("forceUpdateIfDuplicate / planLearnOutcomes", () => {
       reasoning: "Superseded",
     }, existing, context(), "/tmp/project");
     expect(planned.retired).toBe(1);
-    expect(planned.mutations.some((mutation) => mutation.delete && mutation.path === existing[0].filepath)).toBe(true);
+    expect(planned.mutations).toHaveLength(1);
+    expect(parseMemory(planned.mutations[0].content!)?.frontmatter.status).toBe("retired");
   });
 });
 
@@ -946,7 +947,7 @@ describe("runLearn", () => {
     await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   });
 
-  it("writes a memory and compiled files from a distilled new outcome", async () => {
+  it("writes a candidate excluded from compiled instructions from a distilled new outcome", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-learn-"));
     dirs.push(dir);
     await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
@@ -973,7 +974,8 @@ describe("runLearn", () => {
     expect(files.some((file) => file.startsWith("M-001"))).toBe(true);
     const parsed = parseMemory(await fs.readFile(path.join(dir, ".memory", "memories", files[0]), "utf8"));
     expect(parsed?.frontmatter.evidence.pr).toBe("#42");
-    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).toContain("M-001");
+    expect(parsed?.frontmatter.status).toBe("candidate");
+    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).not.toContain("M-001");
   });
 
   it("uses v0.2 inferPaths by default and experimental inference from config or flag", async () => {
@@ -1050,7 +1052,7 @@ describe("runLearn", () => {
     expect(result.skipped).toBe("memory-pr-recompile");
   });
 
-  it("records retired memory deletions so they can be staged", async () => {
+  it("records retired memory edits so they can be staged", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-retire-"));
     dirs.push(dir);
     const memoriesDir = path.join(dir, ".memory", "memories");
@@ -1090,8 +1092,8 @@ Old rule that should be retired.`, "utf8");
       },
     });
 
-    expect(result.deleted).toContain(filepath);
-    await expect(fs.access(filepath)).rejects.toThrow();
+    expect(result.written).toContain(filepath);
+    expect(parseMemory(await fs.readFile(filepath, "utf8"))?.frontmatter.status).toBe("retired");
     expect(opened?.files).toEqual(MANAGED_GIT_PATHS);
     expect(opened?.title).toBe("🧠 teamrecall: retired 1 (from #42)");
     expect(opened?.force).toBe(true);
@@ -1378,7 +1380,7 @@ describe("recurrence promotion", () => {
     expect(parsed.candidate_id).toBe(styleId);
   });
 
-  it("records keep-comments-short on PR1 and promotes it on PR2", async () => {
+  it("records keep-comments-short on PR1 and creates a rule candidate with one citation on PR2", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "teamrecall-recurrence-"));
     dirs.push(dir);
     await fs.mkdir(path.join(dir, ".memory", "memories"), { recursive: true });
@@ -1436,7 +1438,8 @@ describe("recurrence promotion", () => {
     expect(parsed?.frontmatter.evidence.prs).toEqual(["#10", "#22"]);
     expect(parsed?.frontmatter.evidence.pr).toBe("#22");
     expect(parsed?.frontmatter.evidence.reviewers).toEqual(["bob", "carol"]);
-    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).toContain("M-001");
+    expect(parsed?.frontmatter.status).toBe("candidate");
+    expect(await fs.readFile(path.join(dir, "AGENTS.md"), "utf8")).not.toContain("M-001");
     const afterPromote = await loadCandidates(dir);
     expect(afterPromote.find((item) => item.id === styleId)?.promoted_to).toBe("M-001");
   });

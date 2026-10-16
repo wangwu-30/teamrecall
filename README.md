@@ -389,3 +389,13 @@ If this helps your team, give it a ⭐! Goal: 10k stars by showing **value on da
 如果这对你的团队有帮助，给它一个 ⭐！目标：通过**第一天就有价值**和**零摩擦安装**达到 10k stars。
 
 [![Star History Chart](https://api.star-history.com/svg?repos=wangwu-30/teamrecall&type=Date)](https://star-history.com/#wangwu-30/teamrecall&Date)
+
+### Promotion lifecycle v2
+
+New distilled rules are candidates, excluded from agent instructions until cited
+by two distinct subsequent PRs (`promotion_min_prs: 2` in `.memory/config.yml`).
+Git frontmatter records retrieval counts, distinct cited PRs and last-use dates.
+Learning retires rules idle for `review_ttl_days` (default 90); retrieval alone
+never promotes or renews them. `propose_retire` also preserves a retired record.
+See [the lifecycle contract and design references](docs/promotion-v2.md) for
+counter semantics, compatibility, operational limits and validation details.

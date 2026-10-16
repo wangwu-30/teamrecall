@@ -1,3 +1,4 @@
+import { emptyUsage, recordCitation, recordRetrieval, retireIfIdle } from "./usage.js";
 import * as path from "node:path";
 import {
   extractTerms,
@@ -18,6 +19,7 @@ import {
 import { bm25ScoresFromIndex, buildBm25Index, tokenize } from "./retrieve.js";
 import {
   clampBody,
+  parseMemory,
   formatMemory,
   generateMemoryId,
   isoDate,
@@ -237,6 +239,7 @@ export function selectPromptMemories(
   },
   k = PROMPT_MEMORY_K,
 ): Memory[] {
+  memories = memories.filter(m => m.frontmatter.status === "active" || m.frontmatter.status === "candidate");
   if (memories.length <= k) return memories;
   const query = tokenize([
     ...(input.reviewer_comments ?? []).map((comment) => comment.body),
@@ -262,7 +265,7 @@ export function generateDistillationPrompt(input: LearnInput): string {
     title: input.title,
     body: input.pr_body,
   })
-    .map((memory) => `- ${memory.frontmatter.id}: ${firstLine(memory.body).slice(0, PROMPT_MEMORY_TITLE_CHARS)}`)
+    .map((memory) => `- ${memory.frontmatter.id}: [${memory.frontmatter.status}] ${firstLine(memory.body).slice(0, PROMPT_MEMORY_TITLE_CHARS)}`)
     .join("\n");
   const candidateIndex = selectPromptCandidates(input.candidates ?? [], {
     review_comments: input.review_comments,
@@ -309,6 +312,24 @@ A memory must have:
 1. Observable trigger condition (when to apply it)
 2. Decision it changes (not just facts)
 3. Broader applicability beyond this specific PR
+
+Reusability gate (required for new, promote, reuse and update):
+- Name a future, different PR where this changes a decision. A repeated word or nearby file is not reuse.
+- Can the rule stand without this PR's concrete filenames, variable names, API internals or one-off implementation steps?
+- Is it an evidenced team convention, rather than a fact description or generic engineering advice?
+Reject if any check fails; do not invent a broad policy by generalizing a local fix. Use no_op.
+Positive examples (only when supported by human review):
+1. For bug fixes, add a regression test that fails before the fix and exercises the real integration boundary.
+2. When adding an API to documentation, mark its introduction version using the team's version annotation.
+3. For implementation comments, explain only non-obvious rationale briefly; omit narration of the code.
+Negative examples (one-off repairs, not standing team rules):
+1. In the trace parser, subtract one from the mapped column and remove the browser-only snapshot branch.
+2. Export this test provider object directly instead of wrapping it in a factory like the coverage provider.
+3. Reset this mock constructor's prototype to the base object when switching back to its empty implementation.
+
+New rules are stored as candidate, never immediately active. Promote proposes a reusable rule from a raw review candidate;
+activation still requires the configured number of distinct subsequent PR citations. Existing candidate M-ids can be reused.
+Only return reuse/update/merge when current human review actually applies the same rule; retrieval alone is not a citation.
 
 You own where the rule applies. Output \`applies_to\` globs for the *rule*, not the file the comment happened to sit on.
 Generic examples: \`src/auth/**\`, \`docs/**\`, \`**/*.css\`. Keep dot-directories. Do not copy an exact evidence filename unless that file *is* the rule.
@@ -483,45 +504,73 @@ export function planLearnOutcomes(
   trackedFiles: string[] = [],
   experimentalPaths = false,
   reviewCandidates: ReviewCandidate[] = [],
+  usageOptions: { threshold?: number; retrievedIds?: string[] } = {},
 ): LearnPlan {
   const lessons = (raw.memories && raw.memories.length > 0 ? raw.memories : [raw])
     .map((outcome) => applyCandidateDecision(outcome, reviewCandidates))
     .map((outcome) => forceUpdateIfDuplicate(outcome, existing))
     .slice(0, MAX_LEARN_PER_PR);
 
+  const threshold = usageOptions.threshold ?? 2;
+  if (!Number.isSafeInteger(threshold) || threshold < 1 || !Number.isFinite(ttlDays) || ttlDays <= 0) {
+    throw new Error("promotion_min_prs must be a positive integer and review_ttl_days must be positive");
+  }
   const mutations: FileMutation[] = [];
+  let idleRetired = 0;
+  const working = existing.map(memory => {
+    let frontmatter = retireIfIdle(memory.frontmatter, isoDate(), ttlDays);
+    if (frontmatter.status !== memory.frontmatter.status) idleRetired++;
+    if (usageOptions.retrievedIds?.includes(frontmatter.id)) frontmatter = recordRetrieval(frontmatter, isoDate());
+    if (frontmatter !== memory.frontmatter) mutations.push({ path: memory.filepath, content: formatMemory(frontmatter, memory.body) });
+    return { ...memory, frontmatter };
+  });
+  existing = working;
   const outcomes: LearnOutcome[] = [];
   const conflicts: PathConflict[] = [];
   const scope_notes: string[] = [];
   let learned = 0;
   let updated = 0;
-  let retired = 0;
+  let retired = idleRetired;
   const usedIds = existing.map((memory) => memory.frontmatter.id);
   let activeCount = existing.filter((memory) => memory.frontmatter.status === "active").length;
 
   for (const outcome of lessons) {
-    if (outcome.action === "no_op" || outcome.action === "reuse") {
+    if (outcome.action === "no_op") {
       outcomes.push(outcome);
-      continue;
-    }
-
-    if ((outcome.action === "new" || outcome.action === "promote") && activeCount >= MAX_ACTIVE_MEMORIES) {
-      outcomes.push({
-        ...outcome,
-        action: "no_op",
-        reasoning: `Active memory cap (${MAX_ACTIVE_MEMORIES}) reached`,
-      });
       continue;
     }
 
     const planned = planOne(outcome, existing, context, projectDir, usedIds, ttlDays, trackedFiles, experimentalPaths, reviewCandidates);
     outcomes.push(planned.outcome);
-    mutations.push(...planned.mutations);
+    for (const mutation of planned.mutations) {
+      if (mutation.content) {
+        const parsed = parseMemory(mutation.content);
+        if (parsed) {
+          let fm = parsed.frontmatter;
+          const previous = existing.find(m => m.frontmatter.id === fm.id);
+          if (["candidate", "active"].includes(fm.status) && ["reuse", "update", "merge", "promote"].includes(outcome.action)) {
+            fm = recordCitation(fm, context.number, isoDate(), threshold);
+          }
+          if (fm.status === "active" && previous?.frontmatter.status !== "active") {
+            if (activeCount >= MAX_ACTIVE_MEMORIES) fm = { ...fm, status: "candidate" };
+            else activeCount++;
+          }
+          mutation.content = formatMemory(fm, parsed.body);
+          const next = { frontmatter: fm, body: parsed.body, filepath: mutation.path };
+          if (previous) existing[existing.indexOf(previous)] = next;
+          else existing.push(next);
+        }
+      }
+      // Last mutation for a file wins, including retrieval metadata plus a citation.
+      const index = mutations.findIndex(item => item.path === mutation.path);
+      if (index >= 0) mutations[index] = mutation;
+      else mutations.push(mutation);
+    }
     if (planned.scopeNote) scope_notes.push(planned.scopeNote);
     learned += planned.learned;
     updated += planned.updated;
     retired += planned.retired;
-    activeCount += planned.learned - planned.retired;
+    activeCount = existing.filter(m => m.frontmatter.status === "active").length;
     usedIds.push(...planned.usedIds);
     conflicts.push(...detectConflicts(planned.outcome, existing));
   }
@@ -605,10 +654,8 @@ function planOne(
     if (matched?.promoted_to) {
       const target = existing.find((memory) => memory.frontmatter.id === matched.promoted_to);
       if (target) {
-        return planUpdate(outcome, target, context, created, evidence, ttlDays, trackedFiles, experimentalPaths, {
-          extraPr: matched.pr,
-          extraReviewer: matched.reviewer,
-        });
+        return planOne({ ...outcome, action: "update", memory_id: target.frontmatter.id }, existing,
+          context, projectDir, usedIds, ttlDays, trackedFiles, experimentalPaths, reviewCandidates);
       }
     }
     const reviewer = matchingReviewer(context, matched, outcome.body);
@@ -641,7 +688,8 @@ function planOne(
       author: reviewer,
       created,
       review_after: reviewAfterDate(created, ttlDays),
-      status: "active",
+      status: "candidate",
+      usage: emptyUsage(matched?.pr ?? context.number),
     };
     const filename = memoryFilename(id, title);
     return {
@@ -661,7 +709,7 @@ function planOne(
   }
 
   const target = existing.find((memory) => memory.frontmatter.id === outcome.memory_id);
-  if (!target) {
+  if (!target || !["candidate", "active"].includes(target.frontmatter.status)) {
     return {
       outcome: { ...outcome, action: "no_op", reasoning: `Unknown memory ${outcome.memory_id}` },
       mutations: [],
@@ -677,12 +725,10 @@ function planOne(
       ...target.frontmatter,
       status: "retired" as const,
     };
-    const dest = path.join(projectDir, ".memory", "retired", path.basename(target.filepath));
     return {
       outcome,
       mutations: [
-        { path: dest, content: formatMemory(retired, target.body) },
-        { path: target.filepath, delete: true },
+        { path: target.filepath, content: formatMemory(retired, target.body) },
       ],
       learned: 0,
       updated: 0,
@@ -745,6 +791,7 @@ function planUpdate(
   const gated = gateAlwaysScope(requested, pathsSource, prs, reviewers);
   const nextFrontmatter: MemoryFrontmatter = {
     ...target.frontmatter,
+    usage: target.frontmatter.usage ?? emptyUsage(target.frontmatter.evidence?.pr),
     paths,
     paths_source: pathsSource,
     scope: gated.scope,
@@ -761,7 +808,7 @@ function planUpdate(
     },
     review_after: reviewAfterDate(created, ttlDays),
   };
-  const body = clampBody(outcome.body || target.body);
+  const body = outcome.action === "reuse" ? target.body : clampBody(outcome.body || target.body);
   return {
     outcome: { ...outcome, action: outcome.action === "promote" ? "update" : outcome.action, memory_id: target.frontmatter.id },
     mutations: [{ path: target.filepath, content: formatMemory(nextFrontmatter, body) }],

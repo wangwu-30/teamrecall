@@ -112,3 +112,6 @@ export type {
   ReviewCandidate,
   TeamRecallConfig,
 } from "./types.js";
+
+export { emptyUsage, recordCitation, recordRetrieval, retireIfIdle } from "./usage.js";
+export type { RuleUsage } from "./types.js";
