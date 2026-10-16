@@ -232,6 +232,7 @@ export async function runLearn(input: {
   }
   const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths, reviewCandidates, {
     threshold: config.promotion_min_prs,
+    dedupThreshold: config.dedup_similarity_threshold,
     retrievedIds: distiller === "llm" ? selectPromptMemories(memories, {
       review_comments: context.review_comments, reviewer_comments: context.reviewer_comments,
       files: context.files, title: context.title, body: context.body,

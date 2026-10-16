@@ -1,3 +1,4 @@
+import { DEFAULT_DEDUP_SIMILARITY_THRESHOLD, ruleSimilarity, validateDedupThreshold } from "./dedup.js";
 import { emptyUsage, recordCitation, recordRetrieval, retireIfIdle } from "./usage.js";
 import * as path from "node:path";
 import {
@@ -395,23 +396,27 @@ export function parseDistillationResponse(response: string): LearnOutcome {
   }
 }
 
-export function checkDuplicate(title: string, paths: string[], existing: Memory[]): DedupResult {
-  const normalizedTitle = title.toLowerCase().trim();
-
-  for (const memory of existing) {
-    const existingTitle = firstLine(memory.body).toLowerCase().trim();
-    const titleSimilar = levenshteinDistance(normalizedTitle, existingTitle) < 5;
-    const pathsOverlap = paths.some((glob) => memory.frontmatter.paths.includes(glob));
-    if (titleSimilar && pathsOverlap) {
-      return {
-        is_duplicate: true,
-        existing_id: memory.frontmatter.id,
-        reason: `Similar to existing ${memory.frontmatter.id}`,
-      };
-    }
-  }
-
-  return { is_duplicate: false, reason: "No duplicate found" };
+export function checkDuplicate(
+  text: string,
+  paths: string[],
+  existing: Memory[],
+  threshold = DEFAULT_DEDUP_SIMILARITY_THRESHOLD,
+  evidencePr?: string,
+): DedupResult {
+  validateDedupThreshold(threshold);
+  const matches = existing
+    .filter(memory => ["candidate", "active"].includes(memory.frontmatter.status))
+    .filter(memory => pathsOverlap(paths, memory.frontmatter.paths))
+    .map(memory => ({ memory, score: ruleSimilarity(text, memory.body, Boolean(evidencePr
+      && distinctEvidencePrs(memory.frontmatter.evidence.prs, memory.frontmatter.evidence.pr).includes(`#${evidencePr.replace(/^#/, "")}`))) }))
+    .filter(match => match.score >= threshold)
+    .sort((a, b) => b.score - a.score || a.memory.frontmatter.id.localeCompare(b.memory.frontmatter.id));
+  const best = matches[0];
+  return best ? {
+    is_duplicate: true,
+    existing_id: best.memory.frontmatter.id,
+    reason: `Same-category match ${best.memory.frontmatter.id} (similarity ${best.score.toFixed(3)})`,
+  } : { is_duplicate: false, reason: "No duplicate found" };
 }
 
 export function applyAppliesTo(outcome: LearnOutcome): LearnOutcome {
@@ -431,7 +436,8 @@ export function hydrateCandidateId(outcome: LearnOutcome): LearnOutcome {
 
 export function applyCandidateDecision(outcome: LearnOutcome, candidates: ReviewCandidate[]): LearnOutcome {
   hydrateCandidateId(outcome);
-  if (outcome.candidate_id && candidates.some((candidate) => candidate.id === outcome.candidate_id)) {
+  if (["new", "promote"].includes(outcome.action)
+    && outcome.candidate_id && candidates.some((candidate) => candidate.id === outcome.candidate_id)) {
     outcome.action = "promote";
   }
   for (const child of outcome.memories ?? []) applyCandidateDecision(child, candidates);
@@ -481,17 +487,32 @@ export function gateAlwaysScope(
   return { scope: "triggered", downgraded: true };
 }
 
-export function forceUpdateIfDuplicate(outcome: LearnOutcome, existing: Memory[]): LearnOutcome {
-  if (outcome.action !== "new") return outcome;
-  const title = outcome.title || firstLine(outcome.body || "");
-  const paths = outcome.paths || [];
-  const dup = checkDuplicate(title, paths, existing);
+export function forceUpdateIfDuplicate(
+  outcome: LearnOutcome,
+  existing: Memory[],
+  threshold = DEFAULT_DEDUP_SIMILARITY_THRESHOLD,
+  evidencePr?: string,
+): LearnOutcome {
+  if (!["new", "promote"].includes(outcome.action) || outcome.contradicts || outcome.conflict_with) return outcome;
+  const dup = checkDuplicate(outcome.body || outcome.title || "", outcome.paths || outcome.applies_to || [], existing, threshold, evidencePr);
   if (!dup.is_duplicate) return outcome;
+  const target = existing.find(memory => memory.frontmatter.id === dup.existing_id)!;
+  const proposedBody = outcome.body?.trim() || target.body;
+  const body = target.body.includes(proposedBody) ? target.body
+    : proposedBody.includes(target.body) ? proposedBody : `${target.body}\n\n${proposedBody}`;
+  const fits = clampBody(body) === body.trim();
   return {
     ...outcome,
-    action: "update",
-    memory_id: dup.existing_id,
-    reasoning: `${outcome.reasoning} Forced update: ${dup.reason}`,
+    action: fits ? "update" : "reuse",
+    memory_id: target.frontmatter.id,
+    // Preserve both obligations and the original applicability. Never truncate a supplement.
+    body: fits ? body : target.body,
+    scope: target.frontmatter.scope,
+    paths: undefined,
+    applies_to: undefined,
+    triggers: target.frontmatter.triggers,
+    reasoning: `${outcome.reasoning} Forced ${fits ? "update" : "reuse"}: ${dup.reason}; retained existing applicability`
+      + (fits ? "" : `; combined text exceeds 120 words; explicit consolidation needed for: ${proposedBody}`),
   };
 }
 
@@ -504,13 +525,14 @@ export function planLearnOutcomes(
   trackedFiles: string[] = [],
   experimentalPaths = false,
   reviewCandidates: ReviewCandidate[] = [],
-  usageOptions: { threshold?: number; retrievedIds?: string[] } = {},
+  usageOptions: { threshold?: number; retrievedIds?: string[]; dedupThreshold?: number } = {},
 ): LearnPlan {
   const lessons = (raw.memories && raw.memories.length > 0 ? raw.memories : [raw])
     .map((outcome) => applyCandidateDecision(outcome, reviewCandidates))
-    .map((outcome) => forceUpdateIfDuplicate(outcome, existing))
     .slice(0, MAX_LEARN_PER_PR);
 
+  const dedupThreshold = usageOptions.dedupThreshold ?? DEFAULT_DEDUP_SIMILARITY_THRESHOLD;
+  validateDedupThreshold(dedupThreshold);
   const threshold = usageOptions.threshold ?? 2;
   if (!Number.isSafeInteger(threshold) || threshold < 1 || !Number.isFinite(ttlDays) || ttlDays <= 0) {
     throw new Error("promotion_min_prs must be a positive integer and review_ttl_days must be positive");
@@ -534,7 +556,23 @@ export function planLearnOutcomes(
   const usedIds = existing.map((memory) => memory.frontmatter.id);
   let activeCount = existing.filter((memory) => memory.frontmatter.status === "active").length;
 
-  for (const outcome of lessons) {
+  for (const lesson of lessons) {
+    let outcome = lesson;
+    const candidate = reviewCandidates.find(item => item.id === outcome.candidate_id);
+    if (outcome.action === "new" || (outcome.action === "promote" && candidate && !candidate.promoted_to)) {
+      const proposal = {
+        ...outcome,
+        body: outcome.body || candidate?.gist || outcome.title,
+        paths: experimentalPaths
+          ? resolveMemoryPaths(outcome.paths ?? outcome.applies_to, trackedFiles,
+            unique([...(candidate?.files ?? []), ...evidenceFiles(context)])).paths
+          : outcome.paths?.length ? outcome.paths : outcome.applies_to?.length ? outcome.applies_to
+            : inferPathsV02(unique([...(candidate?.files ?? []), ...context.files])),
+      };
+      // Compare after retirement and each preceding mutation, including same-batch writes.
+      const deduped = forceUpdateIfDuplicate(proposal, existing, dedupThreshold, candidate?.pr);
+      outcome = deduped === proposal ? lesson : deduped;
+    }
     if (outcome.action === "no_op") {
       outcomes.push(outcome);
       continue;
@@ -737,7 +775,9 @@ function planOne(
     };
   }
 
-  return planUpdate(outcome, target, context, created, evidence, ttlDays, trackedFiles, experimentalPaths);
+  const matched = reviewCandidates.find(candidate => candidate.id === outcome.candidate_id);
+  return planUpdate(outcome, target, context, created, evidence, ttlDays, trackedFiles, experimentalPaths,
+    { extraPr: matched?.pr, extraReviewer: matched?.reviewer });
 }
 
 export function matchingReviewer(
@@ -1127,30 +1167,4 @@ function firstLine(body: string): string {
 
 function unique(values: Array<string | undefined | null>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-function levenshteinDistance(a: string, b: string): number {
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-
-  const matrix: number[][] = Array.from({ length: b.length + 1 }, (_, i) => [i]);
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
-  }
-
-  for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1];
-      } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1,
-        );
-      }
-    }
-  }
-
-  return matrix[b.length][a.length];
 }

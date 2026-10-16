@@ -77,3 +77,24 @@ network installation, validation used existing local Vitest 3.2.4, TypeScript
 baseline passed 184 tests with this toolchain before modifications. This does not
 claim validation with the lockfile's exact dependency versions. Package manifests
 and lockfile are unchanged.
+
+## Same-category writes
+
+Before writing each `new` or `promote`, learning compares its resolved paths and
+rule text with the current candidate/active set, after idle retirement. A match
+updates the same ID, merges evidence, and counts only the current distinct PR as
+a citation. Explicit memory actions and a candidate's `promoted_to` mapping take
+precedence over fuzzy matching. Same-response writes participate in later checks;
+retired memories never revive through matching.
+
+`.memory/config.yml` accepts `dedup_similarity_threshold` (default `0.3`, greater
+than zero and at most one). Similarity alone cannot authorize a merge: ordered
+normalized equality, linked candidate evidence, or an emphasized shared phrase
+is also required. This local lexical heuristic can miss semantic paraphrases;
+it does not call a second model. See [experiments and recall audit](FINDINGS-dedup-recall.md).
+
+Automatic updates retain the original applicability and combine both rule texts.
+If the combination exceeds 120 words, learning reuses the existing rule and puts
+the complete supplement in the outcome's reasoning for explicit consolidation.
+It does not silently truncate the supplement or allocate another ID. Existing
+historical duplicates are not migrated by this change.

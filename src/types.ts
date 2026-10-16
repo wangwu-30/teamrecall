@@ -51,6 +51,7 @@ export interface TeamRecallConfig {
   max_active_memories: number;
   review_ttl_days: number;
   promotion_min_prs?: number;
+  dedup_similarity_threshold?: number;
   distillation_model?: string;
   retrieve_always_cap?: number;
   experimental?: {
