@@ -51,9 +51,21 @@ export interface RetrieveResult {
 
 export function tokenize(text: string): string[] {
   const raw = text.split(/[^A-Za-z0-9]+/).flatMap(splitIdent);
-  return raw
+  const tokens = raw
     .map((token) => token.toLowerCase())
     .filter((token) => token.length >= 2 && !STOP.has(token));
+  // Lucene CJKBigramFilter / Elasticsearch cjk_bigram with output_unigrams:
+  // keep single characters so a one-character query also matches inside a run.
+  // Exclude kana punctuation so bigrams never cross word separators.
+  const runs = text.matchAll(/[\u3400-\u4dbf\u4e00-\u9fff\u3041-\u3096\u309d-\u309f\u30a1-\u30fa\u30fc-\u30ff\uac00-\ud7a3]+/gu);
+  for (const [run] of runs) {
+    const chars = [...run];
+    tokens.push(...chars);
+    for (let i = 0; i < chars.length - 1; i++) {
+      tokens.push(chars[i] + chars[i + 1]);
+    }
+  }
+  return tokens;
 }
 
 function splitIdent(word: string): string[] {
