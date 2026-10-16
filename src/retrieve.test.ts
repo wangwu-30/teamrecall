@@ -41,6 +41,32 @@ function memory(partial: {
 }
 
 describe("tokenize / diff", () => {
+  it("emits CJK unigrams and overlapping bigrams", () => {
+    expect(tokenize("审批流程")).toEqual(["审", "批", "流", "程", "审批", "批流", "流程"]);
+    expect(tokenize("审")).toEqual(["审"]);
+    expect(tokenize("㐀㐁 あいう カタカナ 한국어")).toEqual([
+      "㐀", "㐁", "㐀㐁", "あ", "い", "う", "あい", "いう",
+      "カ", "タ", "カ", "ナ", "カタ", "タカ", "カナ",
+      "한", "국", "어", "한국", "국어",
+    ]);
+  });
+
+  it("does not form bigrams across punctuation, whitespace, or ASCII", () => {
+    expect(tokenize("审，批。流 程・カ、ナ！한/국")).toEqual([
+      "审", "批", "流", "程", "カ", "ナ", "한", "국",
+    ]);
+    expect(tokenize("审批retryGuard流程")).toEqual([
+      "retry", "guard", "审", "批", "审批", "流", "程", "流程",
+    ]);
+  });
+
+  it("preserves the original ASCII tokens including stop words and identifiers", () => {
+    expect(tokenize("the HTTPServer retryGuard snake_case src/foo.test.ts A x 1 12 using v2")).toEqual([
+      "http", "server", "retry", "guard", "snake", "case", "src", "foo", "test", "ts", "12", "v2",
+    ]);
+    expect(tokenize(" \n，。！？")).toEqual([]);
+  });
+
   it("splits camelCase and snake_case", () => {
     expect(tokenize("reveal_type in mdtestFile")).toEqual(
       expect.arrayContaining(["reveal", "type", "mdtest", "file"]),
@@ -53,6 +79,22 @@ describe("tokenize / diff", () => {
 });
 
 describe("runRetrieve", () => {
+  it.each(["审批", "审", "批", "审批retryGuard", "한국", "국", "カタ", "タ", "㐀"])(
+    "retrieves continuous CJK text for %s without path boosts or ID ties",
+    async (query) => {
+      const result = await runRetrieve({
+        memories: [
+          memory({ id: "M-001", body: "unrelated content", paths: [], scope: "triggered" }),
+          memory({ id: "M-900", body: "审批流程 retryGuard 한국어 カタカナ 㐀㐁", paths: [], scope: "triggered" }),
+        ],
+        files: [], title: query, k: 1,
+      });
+      expect(result.matched[0]?.id).toBe("M-900");
+      expect(result.matched[0]?.score).toBeGreaterThan(0);
+      expect(result.matched[0]?.reason).toBe("bm25");
+    },
+  );
+
   const changeset = memory({
     id: "M-001",
     scope: "triggered",
