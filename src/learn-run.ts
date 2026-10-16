@@ -27,6 +27,7 @@ import {
   generateDistillationPrompt,
   parseDistillationResponse,
   planLearnOutcomes,
+  selectPromptMemories,
   type LearnPlan,
 } from "./learn.js";
 import { loadConfig, loadMemories } from "./memory.js";
@@ -229,7 +230,13 @@ export async function runLearn(input: {
   if (distiller === "llm") {
     outcome = applyCandidateDecision(outcome, reviewCandidates);
   }
-  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths, reviewCandidates);
+  const plan = planLearnOutcomes(outcome, memories, context, projectDir, config.review_ttl_days, trackedFiles, experimentalPaths, reviewCandidates, {
+    threshold: config.promotion_min_prs,
+    retrievedIds: distiller === "llm" ? selectPromptMemories(memories, {
+      review_comments: context.review_comments, reviewer_comments: context.reviewer_comments,
+      files: context.files, title: context.title, body: context.body,
+    }).map(m => m.frontmatter.id) : [],
+  });
   plan.distiller = distiller;
   plan.distiller_reason = distillerReason;
   const { written, deleted } = await applyMutations(plan);

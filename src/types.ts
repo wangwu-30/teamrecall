@@ -1,5 +1,5 @@
 export type MemoryKind = "gotcha" | "decision" | "convention" | "map";
-export type MemoryStatus = "active" | "retired" | "superseded" | "abandoned";
+export type MemoryStatus = "candidate" | "active" | "retired" | "superseded" | "abandoned";
 export type MemoryScope = "always" | "triggered";
 export type PathsSource = "distiller" | "inferred" | "human";
 export type LearnAction = "reuse" | "update" | "merge" | "propose_retire" | "new" | "promote" | "no_op";
@@ -29,6 +29,16 @@ export interface MemoryFrontmatter {
   review_after: string;
   status: MemoryStatus;
   superseded_by?: string;
+  usage?: RuleUsage;
+}
+
+export interface RuleUsage {
+  retrieval_count: number;
+  citation_count: number;
+  cited_prs: string[];
+  origin_pr: string;
+  last_retrieved_at?: string;
+  last_used_at?: string;
 }
 
 export interface Memory {
@@ -40,6 +50,7 @@ export interface Memory {
 export interface TeamRecallConfig {
   max_active_memories: number;
   review_ttl_days: number;
+  promotion_min_prs?: number;
   distillation_model?: string;
   retrieve_always_cap?: number;
   experimental?: {

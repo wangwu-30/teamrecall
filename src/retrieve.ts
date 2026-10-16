@@ -1,5 +1,7 @@
+import { writeAtomic } from "./utils/atomic.js";
+import { recordRetrieval } from "./usage.js";
 import { COMPILE_TRIGGERED_CAP } from "./constants.js";
-import { loadConfig, loadMemories, memoryScope } from "./memory.js";
+import { formatMemory, isoDate, loadConfig, loadMemories, memoryScope } from "./memory.js";
 import { globMatches } from "./sweep.js";
 import type { Memory, MemoryTrigger, PathsSource } from "./types.js";
 
@@ -308,6 +310,13 @@ export async function runRetrieve(input: RetrieveInput): Promise<RetrieveResult>
   const always = scoreMemories(alwaysAll, query, input, true).slice(0, alwaysCap);
   const matched = scoreMemories(triggered, query, input, false).slice(0, k);
 
+  // Pure in-memory retrieval remains read-only (evaluation callers supply memories).
+  if (input.projectDir && !input.memories) {
+    const ids = new Set([...always, ...matched].map(item => item.id));
+    for (const memory of memories.filter(m => ids.has(m.frontmatter.id))) {
+      await writeAtomic(memory.filepath, formatMemory(recordRetrieval(memory.frontmatter, isoDate()), memory.body));
+    }
+  }
   return {
     k,
     always_cap: alwaysCap,

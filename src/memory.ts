@@ -9,10 +9,11 @@ const DEFAULT_CONFIG: TeamRecallConfig = {
   max_active_memories: 50,
   review_ttl_days: DEFAULT_TTL_DAYS,
   retrieve_always_cap: 8,
+  promotion_min_prs: 2,
 };
 
 const KINDS: MemoryKind[] = ["gotcha", "decision", "convention", "map"];
-const STATUSES: MemoryStatus[] = ["active", "retired", "superseded", "abandoned"];
+const STATUSES: MemoryStatus[] = ["candidate", "active", "retired", "superseded", "abandoned"];
 const SCOPES: MemoryScope[] = ["always", "triggered"];
 const PATH_SOURCES: PathsSource[] = ["distiller", "inferred", "human"];
 
@@ -85,6 +86,7 @@ export function isValidFrontmatter(fm: unknown): fm is MemoryFrontmatter {
     typeof value.created === "string" &&
     typeof value.review_after === "string" &&
     STATUSES.includes(value.status as MemoryStatus) &&
+    (value.usage === undefined || isValidUsage(value.usage)) &&
     (value.status !== "superseded" || (typeof value.superseded_by === "string" && /^M-\d+$/.test(value.superseded_by)))
   );
 }
@@ -186,4 +188,14 @@ export function reviewAfterDate(created: string, ttlDays = DEFAULT_TTL_DAYS): st
 export function memoryFilename(id: string, title: string): string {
   const slug = slugify(title) || "memory";
   return `${id}-${slug}.md`;
+}
+
+function isValidUsage(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const u = value as Record<string, unknown>;
+  return [u.retrieval_count, u.citation_count].every(n => Number.isSafeInteger(n) && Number(n) >= 0)
+    && Array.isArray(u.cited_prs) && u.cited_prs.every(pr => typeof pr === "string")
+    && new Set(u.cited_prs).size === u.cited_prs.length
+    && u.citation_count === u.cited_prs.length && typeof u.origin_pr === "string"
+    && [u.last_used_at, u.last_retrieved_at].every(d => d === undefined || (typeof d === "string" && Number.isFinite(Date.parse(d))));
 }
